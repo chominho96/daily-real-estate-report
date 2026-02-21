@@ -77,3 +77,29 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Notify Discord
+        if: success()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          NOW_KST=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')
+
+          payload=$(cat <<EOF
+          {
+            "content": "✅ 일일 부동산 시황 보고서가 생성되었습니다.",
+            "embeds": [
+              {
+                "title": "보고서 보러가기",
+                "url": "${PAGE_URL}",
+                "description": "생성 시각(KST): ${NOW_KST}\n워크플로우 로그: ${RUN_URL}",
+                "color": 3066993
+              }
+            ]
+          }
+          EOF
+          )
+
+          curl -sS -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK_URL"
