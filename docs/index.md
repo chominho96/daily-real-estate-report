@@ -1,7 +1,11 @@
 # Real-Estate Daily Report
 
-The report will appear here after the first run.
+Mobile-friendly daily market updates published by GitHub Actions.
 
 ## Latest Reports
 
-- No report yet.
+- [2026-02-21](reports/2026-02-21.md)
+
+## How To Update Regions
+
+Edit `config/regions.yaml` and commit.
