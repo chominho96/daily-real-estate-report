@@ -38,14 +38,9 @@ class DailyReportPipeline:
 
         now = datetime.now(tz)
         last_run = self._read_last_run(tz)
-        previous_day = now.date() - timedelta(days=1)
-        previous_day_start = datetime.combine(previous_day, time.min, tzinfo=tz)
-
         if last_run is None:
-            last_run = previous_day_start
-        elif last_run.date() == now.date():
-            # Manual re-runs on the same day should still include the previous day window.
-            last_run = previous_day_start
+            previous_day = now.date() - timedelta(days=1)
+            last_run = datetime.combine(previous_day, time.min, tzinfo=tz)
 
         report_window = ReportWindow(start=last_run, end=now)
         market_start = report_window.start - timedelta(days=8)
