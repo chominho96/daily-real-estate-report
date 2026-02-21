@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -39,7 +39,8 @@ class DailyReportPipeline:
         now = datetime.now(tz)
         last_run = self._read_last_run(tz)
         if last_run is None:
-            last_run = now - timedelta(days=1)
+            previous_day = now.date() - timedelta(days=1)
+            last_run = datetime.combine(previous_day, time.min, tzinfo=tz)
 
         report_window = ReportWindow(start=last_run, end=now)
         market_start = report_window.start - timedelta(days=8)
