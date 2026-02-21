@@ -18,6 +18,9 @@ concurrency:
 jobs:
   generate-and-build:
     runs-on: ubuntu-latest
+    outputs:
+      report_path: ${{ steps.generate_report.outputs.report_path }}
+      report_slug: ${{ steps.generate_report.outputs.report_slug }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,11 +43,17 @@ jobs:
           pip install .[dev]
 
       - name: Generate daily report
+        id: generate_report
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           MOLIT_API_SERVICE_KEY: ${{ secrets.MOLIT_API_SERVICE_KEY }}
         run: |
-          daily-report --root .
+          REPORT_PATH=$(daily-report --root .)
+          echo "report_path=${REPORT_PATH}" >> "$GITHUB_OUTPUT"
+
+          REPORT_FILE=$(basename "$REPORT_PATH")
+          REPORT_SLUG="${REPORT_FILE%.md}"
+          echo "report_slug=${REPORT_SLUG}" >> "$GITHUB_OUTPUT"
 
       - name: Commit generated artifacts
         run: |
@@ -83,9 +92,12 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+          REPORT_SLUG: ${{ needs.generate-and-build.outputs.report_slug }}
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           NOW_KST=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')
+          BASE_URL="${PAGE_URL%/}/"
+          REPORT_URL="${BASE_URL}reports/${REPORT_SLUG}/"
 
           payload=$(cat <<EOF
           {
@@ -93,8 +105,8 @@ jobs:
             "embeds": [
               {
                 "title": "보고서 보러가기",
-                "url": "${PAGE_URL}",
-                "description": "생성 시각(KST): ${NOW_KST}\n워크플로우 로그: ${RUN_URL}",
+                "url": "${REPORT_URL}",
+                "description": "생성 시각(KST): ${NOW_KST}\n사이트 홈: ${PAGE_URL}\n워크플로우 로그: ${RUN_URL}",
                 "color": 3066993
               }
             ]
