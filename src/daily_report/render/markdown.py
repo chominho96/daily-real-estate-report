@@ -16,6 +16,7 @@ def _fmt_dt(value: datetime) -> str:
 def _fmt_data_mode(data_mode: str) -> str:
     mapping = {
         "public_api": "실거래 공공 API",
+        "public_api_empty": "실거래 공공 API (데이터 없음)",
         "synthetic": "샘플 데이터(폴백)",
     }
     return mapping.get(data_mode, data_mode)

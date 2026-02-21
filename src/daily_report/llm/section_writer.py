@@ -104,7 +104,11 @@ class SectionWriter:
                         txn_change=mover["txn_daily_change_pct"],
                     )
                 )
-            lines.append("- 참고: 공공 API 설정이 없거나 응답 오류가 있으면 샘플 데이터로 대체됩니다.")
+            data_mode = str(context.get("market_data_mode", ""))
+            if data_mode == "public_api_empty":
+                lines.append("- 참고: 이번 집계 구간에는 공공 API에 매칭된 실거래 데이터가 없어 지표가 제한될 수 있습니다.")
+            elif data_mode == "synthetic":
+                lines.append("- 참고: 공공 API 설정이 없거나 응답 오류가 있어 샘플 데이터로 대체되었습니다.")
             return "\n".join(lines)
 
         return "- 기본 생성기로 작성된 섹션입니다."

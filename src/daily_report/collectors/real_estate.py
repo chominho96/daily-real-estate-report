@@ -29,6 +29,7 @@ def fetch_market_points(
         )
         if points:
             return points, "public_api"
+        return [], "public_api_empty"
 
     return _build_synthetic_market_points(regions=regions, start=start, end=end), "synthetic"
 
