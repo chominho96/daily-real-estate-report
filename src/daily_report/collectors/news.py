@@ -108,7 +108,7 @@ def _fetch_policy_news_from_naver(start: datetime, end: datetime, news_cfg: News
             continue
 
         for item in payload.get("items", []):
-            link = str(item.get("originallink") or item.get("link") or "").strip()
+            link = str(item.get("link") or item.get("originallink") or "").strip()
             title = _strip_html_tags(str(item.get("title", "")))
             published_raw = str(item.get("pubDate", "")).strip()
 
