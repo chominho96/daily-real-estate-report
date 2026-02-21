@@ -1,11 +1,7 @@
-# Real-Estate Daily Report
+# 일일 부동산 시황 보고서
 
-Mobile-friendly daily market updates published by GitHub Actions.
+첫 실행이 완료되면 보고서가 아래 목록에 표시됩니다.
 
-## Latest Reports
+## 최신 보고서
 
-- [2026-02-21](reports/2026-02-21.md)
-
-## How To Update Regions
-
-Edit `config/regions.yaml` and commit.
+- 아직 생성된 보고서가 없습니다.

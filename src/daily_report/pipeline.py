@@ -15,6 +15,12 @@ from daily_report.models import MarketMetric, MarketPoint, NewsItem, ReportWindo
 from daily_report.render.markdown import render_docs_index, render_fixed_report
 from daily_report.settings import load_regions, load_report_config
 
+DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+def _fmt_dt(value: datetime) -> str:
+    return value.strftime(DATETIME_FMT)
+
 
 class DailyReportPipeline:
     def __init__(self, root: Path) -> None:
@@ -105,8 +111,8 @@ class DailyReportPipeline:
         market_data_mode: str,
     ) -> dict[str, Any]:
         base = {
-            "window_start": report_window.start.isoformat(),
-            "window_end": report_window.end.isoformat(),
+            "window_start": _fmt_dt(report_window.start),
+            "window_end": _fmt_dt(report_window.end),
             "market_data_mode": market_data_mode,
         }
 
@@ -116,7 +122,7 @@ class DailyReportPipeline:
                     "title": item.title,
                     "link": item.link,
                     "source": item.source,
-                    "published_at": item.published_at.isoformat(),
+                    "published_at": _fmt_dt(item.published_at),
                 }
                 for item in news_items
             ]
@@ -137,7 +143,7 @@ class DailyReportPipeline:
                 "title": item.title,
                 "link": item.link,
                 "source": item.source,
-                "published_at": item.published_at.isoformat(),
+                "published_at": _fmt_dt(item.published_at),
             }
             for item in news_items
         ]
@@ -149,17 +155,31 @@ class DailyReportPipeline:
         filename = now.strftime("%Y-%m-%d")
         report_path = self.reports_dir / f"{filename}.md"
         if report_path.exists():
-            report_path = self.reports_dir / f"{filename}-{now.strftime('%H%M')}.md"
+            report_path = self.reports_dir / f"{filename}-{now.strftime('%H-%M')}.md"
 
         report_path.write_text(report_text, encoding="utf-8")
         return report_path
 
     def _write_index(self) -> None:
         self.docs_dir.mkdir(parents=True, exist_ok=True)
-        reports = sorted(self.reports_dir.glob("*.md"), reverse=True)
+        reports = sorted(
+            self.reports_dir.glob("*.md"),
+            key=self._report_sort_key,
+            reverse=True,
+        )
         relative = [f"reports/{path.name}" for path in reports[:90]]
         index_text = render_docs_index(relative)
         (self.docs_dir / "index.md").write_text(index_text, encoding="utf-8")
+
+    def _report_sort_key(self, path: Path) -> datetime:
+        stem = path.stem
+        patterns = ["%Y-%m-%d-%H-%M", "%Y-%m-%d-%H%M", "%Y-%m-%d"]
+        for pattern in patterns:
+            try:
+                return datetime.strptime(stem, pattern)
+            except ValueError:
+                continue
+        return datetime.min
 
     def _write_run_artifact(
         self,
@@ -174,10 +194,10 @@ class DailyReportPipeline:
     ) -> None:
         self.data_processed_dir.mkdir(parents=True, exist_ok=True)
         payload = {
-            "generated_at": now.isoformat(),
+            "generated_at": _fmt_dt(now),
             "window": {
-                "start": window.start.isoformat(),
-                "end": window.end.isoformat(),
+                "start": _fmt_dt(window.start),
+                "end": _fmt_dt(window.end),
             },
             "counts": {
                 "news_items": len(news_items),

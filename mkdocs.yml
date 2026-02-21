@@ -1,12 +1,12 @@
-site_name: Daily Real-Estate Report
-site_description: Automated daily real-estate market report
+site_name: 일일 부동산 시황 보고서
+site_description: 매일 자동 생성되는 부동산 시황 리포트
 
 docs_dir: docs
 site_dir: site
 
 theme:
   name: material
-  language: en
+  language: ko
   features:
     - navigation.top
     - navigation.tracking
