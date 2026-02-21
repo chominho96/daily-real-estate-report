@@ -74,7 +74,13 @@ class DailyReportPipeline:
                 top_movers=top_movers,
                 market_data_mode=market_data_mode,
             )
-            section_bodies[section.id] = writer.write(section, section_context)
+            generated_body = writer.write(section, section_context)
+            section_bodies[section.id] = self._compose_section_body(
+                section=section,
+                generated_body=generated_body,
+                news_items=news_items,
+                market_metrics=market_metrics,
+            )
 
         report_text = render_fixed_report(
             generated_at=now,
@@ -154,6 +160,66 @@ class DailyReportPipeline:
             for item in news_items
         ]
         return base
+
+    def _compose_section_body(
+        self,
+        section: SectionConfig,
+        generated_body: str,
+        news_items: list[NewsItem],
+        market_metrics: list[MarketMetric],
+    ) -> str:
+        if section.id == "policy_news":
+            news_list = self._render_news_list(news_items)
+            if generated_body.strip():
+                return f"{generated_body.strip()}\n\n### 수집 뉴스 목록\n{news_list}"
+            return f"### 수집 뉴스 목록\n{news_list}"
+
+        if section.id == "price_trend":
+            table = self._render_price_trend_table(market_metrics)
+            if not market_metrics:
+                return table
+            commentary = generated_body.strip()
+            if not commentary:
+                return table
+            return f"{table}\n\n### 해석\n{commentary}"
+
+        return generated_body
+
+    def _render_news_list(self, news_items: list[NewsItem]) -> str:
+        if not news_items:
+            return "- 수집된 뉴스가 없습니다."
+
+        lines: list[str] = []
+        for item in news_items:
+            lines.append(f"- [{item.title}]({item.link}) ({item.source}, {_fmt_dt(item.published_at)})")
+        return "\n".join(lines)
+
+    def _render_price_trend_table(self, market_metrics: list[MarketMetric]) -> str:
+        if not market_metrics:
+            return "- 집계 가능한 시세 지표가 없습니다."
+
+        asset_map = {
+            "apartment": "아파트",
+            "villa": "빌라",
+            "officetel": "오피스텔",
+        }
+        lines = [
+            "| 지역 | 자산군 | 평균 가격(억 원) | 전일 대비 | 전주 대비 | 거래 건수 | 거래 건수(전일 대비) |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+        for metric in market_metrics:
+            lines.append(
+                "| {region} | {asset} | {price:.2f} | {d:+.2f}% | {w:+.2f}% | {txn} | {td:+.2f}% |".format(
+                    region=metric.region_name,
+                    asset=asset_map.get(metric.asset, metric.asset),
+                    price=metric.current_avg_price / 10000.0,
+                    d=metric.daily_change_pct,
+                    w=metric.weekly_change_pct,
+                    txn=metric.current_txn_count,
+                    td=metric.txn_daily_change_pct,
+                )
+            )
+        return "\n".join(lines)
 
     def _write_report(self, now: datetime, report_text: str) -> Path:
         self.reports_dir.mkdir(parents=True, exist_ok=True)

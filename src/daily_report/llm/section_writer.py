@@ -46,8 +46,24 @@ class SectionWriter:
             f"언어 코드: {self._language}\n"
             f"컨텍스트 JSON:\n{json.dumps(context, ensure_ascii=False, default=str)}"
         )
+        if section.id == "policy_news":
+            prompt += (
+                "\n\n추가 규칙: 아래 구조를 지켜 작성하세요."
+                "\n- 핵심 요약"
+                "\n- 실수요자 영향 및 행동 제언"
+                "\n  - (하위 항목은 반드시 2칸 들여쓰기한 불릿 사용)"
+                "\n- 보유자 영향 및 행동 제언"
+                "\n  - (하위 항목은 반드시 2칸 들여쓰기한 불릿 사용)"
+                "\n- 투자자 영향 및 행동 제언"
+                "\n  - (하위 항목은 반드시 2칸 들여쓰기한 불릿 사용)"
+                "\n대화체(예: 알려주시면, 해드리겠습니다) 문장은 금지합니다."
+            )
         if section.id == "price_trend":
-            prompt += "\n\n추가 규칙: 가격은 반드시 억 원 단위로만 표기하고, 가능하면 current_avg_price_eok 값을 사용하세요."
+            prompt += (
+                "\n\n추가 규칙: 가격은 반드시 억 원 단위로만 표기하세요. "
+                "표는 작성하지 말고 해석 코멘트만 3~5개 불릿으로 작성하세요. "
+                "데이터 요청 문장(예: 데이터를 제공해 주시면)은 금지합니다."
+            )
 
         try:
             client = OpenAI(api_key=api_key)
@@ -55,7 +71,7 @@ class SectionWriter:
             text = str(getattr(response, "output_text", "") or "").strip()
             if not text:
                 text = self._extract_text_from_response(response)
-            return text
+            return self._sanitize_llm_output(section=section, text=text)
         except Exception as exc:
             if self._is_unsupported_temperature_error(exc):
                 self._log(f"section={section.id} llm=retry_without_temperature")
@@ -64,7 +80,7 @@ class SectionWriter:
                     text = str(getattr(response, "output_text", "") or "").strip()
                     if not text:
                         text = self._extract_text_from_response(response)
-                    return text
+                    return self._sanitize_llm_output(section=section, text=text)
                 except Exception as retry_exc:
                     self._log(f"section={section.id} llm=error type={type(retry_exc).__name__} detail={retry_exc}")
                     if self._debug:
@@ -137,17 +153,14 @@ class SectionWriter:
             metrics = context.get("metrics", [])
             if not metrics:
                 return "- 집계 가능한 시세 지표가 없습니다."
-            lines = ["| 지역 | 자산군 | 평균 가격(억 원) | 전일 대비 | 전주 대비 | 거래 건수 | 거래 건수(전일 대비) |", "|---|---:|---:|---:|---:|---:|---:|"]
-            for metric in metrics:
-                price_eok = float(metric["current_avg_price"]) / 10000.0
+            lines = ["- 핵심 해석:"]
+            for metric in metrics[:3]:
                 lines.append(
-                    "| {region} | {asset} | {price:.2f} | {d:+.2f}% | {w:+.2f}% | {txn} | {td:+.2f}% |".format(
+                    "  - {region} {asset}: 가격 {d:+.2f}% (전일), {w:+.2f}% (전주), 거래량 {td:+.2f}% (전일)".format(
                         region=metric["region_name"],
                         asset=asset_map.get(metric["asset"], metric["asset"]),
-                        price=price_eok,
                         d=metric["daily_change_pct"],
                         w=metric["weekly_change_pct"],
-                        txn=metric["current_txn_count"],
                         td=metric["txn_daily_change_pct"],
                     )
                 )
@@ -176,3 +189,90 @@ class SectionWriter:
             return "\n".join(lines)
 
         return "- 기본 생성기로 작성된 섹션입니다."
+
+    def _sanitize_llm_output(self, section: SectionConfig, text: str) -> str:
+        if not text:
+            return ""
+
+        banned_phrases = [
+            "알려주시면",
+            "해드리겠습니다",
+            "해 드리겠습니다",
+            "도와드리겠습니다",
+            "제공해 주시면",
+            "제공해주시면",
+            "즉시 계산해",
+            "진행 방법",
+        ]
+
+        lines: list[str] = []
+        for raw in text.splitlines():
+            line = raw.rstrip()
+            stripped = line.strip()
+            if not stripped:
+                lines.append("")
+                continue
+            if any(phrase in stripped for phrase in banned_phrases):
+                continue
+            if stripped.startswith("## ") and section.title in stripped:
+                continue
+            lines.append(line)
+
+        sanitized = "\n".join(lines).strip()
+        if section.id == "policy_news":
+            sanitized = self._normalize_policy_indentation(sanitized)
+        if section.id == "price_trend":
+            sanitized = self._strip_markdown_table_blocks(sanitized)
+
+        return sanitized.strip()
+
+    def _normalize_policy_indentation(self, text: str) -> str:
+        if not text:
+            return text
+
+        parent_labels = (
+            "- 영향",
+            "- 권고",
+            "- 행동 제언",
+            "- 모니터링",
+        )
+
+        out: list[str] = []
+        inside_parent = False
+        for raw in text.splitlines():
+            line = raw.rstrip()
+            stripped = line.strip()
+
+            if not stripped:
+                out.append("")
+                inside_parent = False
+                continue
+
+            if any(stripped.startswith(label) for label in parent_labels):
+                out.append(stripped)
+                inside_parent = True
+                continue
+
+            if stripped.startswith("## "):
+                out.append(stripped)
+                inside_parent = False
+                continue
+
+            if inside_parent and stripped.startswith("- "):
+                out.append(f"  {stripped}")
+                continue
+
+            out.append(line)
+
+        return "\n".join(out)
+
+    def _strip_markdown_table_blocks(self, text: str) -> str:
+        kept: list[str] = []
+        for raw in text.splitlines():
+            stripped = raw.strip()
+            if stripped.startswith("|") and stripped.endswith("|"):
+                continue
+            if stripped.startswith("|---"):
+                continue
+            kept.append(raw)
+        return "\n".join(kept).strip()
