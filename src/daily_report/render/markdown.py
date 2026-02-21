@@ -90,7 +90,6 @@ def render_fixed_report(
     lines.append("")
     lines.append("## 참고")
     lines.append("")
-    lines.append("- 보고서 형식은 고정이고, 섹션 본문만 매 실행마다 재생성됩니다.")
     lines.append("- 지역 설정은 `config/regions.yaml`에서 수정할 수 있습니다.")
     lines.append("- 같은 날짜에 여러 번 생성되면 파일명에 시:분이 함께 표시됩니다.")
     lines.append("- [홈으로 이동](../index.md)")

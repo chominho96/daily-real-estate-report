@@ -36,6 +36,8 @@ class SectionWriter:
             f"언어 코드: {self._language}\n"
             f"컨텍스트 JSON:\n{json.dumps(context, ensure_ascii=False, default=str)}"
         )
+        if section.id == "price_trend":
+            prompt += "\n\n추가 규칙: 가격은 반드시 억 원 단위로만 표기하고, 가능하면 current_avg_price_eok 값을 사용하세요."
 
         try:
             client = OpenAI(api_key=api_key)
@@ -71,13 +73,14 @@ class SectionWriter:
             metrics = context.get("metrics", [])
             if not metrics:
                 return "- 집계 가능한 시세 지표가 없습니다."
-            lines = ["| 지역 | 자산군 | 평균 가격 | 전일 대비 | 전주 대비 | 거래 건수 | 거래 건수(전일 대비) |", "|---|---:|---:|---:|---:|---:|---:|"]
+            lines = ["| 지역 | 자산군 | 평균 가격(억 원) | 전일 대비 | 전주 대비 | 거래 건수 | 거래 건수(전일 대비) |", "|---|---:|---:|---:|---:|---:|---:|"]
             for metric in metrics:
+                price_eok = float(metric["current_avg_price"]) / 10000.0
                 lines.append(
                     "| {region} | {asset} | {price:.2f} | {d:+.2f}% | {w:+.2f}% | {txn} | {td:+.2f}% |".format(
                         region=metric["region_name"],
                         asset=asset_map.get(metric["asset"], metric["asset"]),
-                        price=metric["current_avg_price"],
+                        price=price_eok,
                         d=metric["daily_change_pct"],
                         w=metric["weekly_change_pct"],
                         txn=metric["current_txn_count"],

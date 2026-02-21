@@ -34,11 +34,11 @@ real_estate_api:
 
 sections:
   - id: "policy_news"
-    title: "정책 뉴스 (직전 실행 ~ 현재)"
+    title: "정책 뉴스"
     instruction: "정책/규제 뉴스 핵심을 요약하고 실수요자, 보유자, 투자자 관점의 영향까지 정리해줘."
   - id: "price_trend"
     title: "지역·자산군별 가격 추이"
-    instruction: "관심 지역의 아파트, 빌라, 오피스텔 가격/거래량 지표를 전일·전주 기준으로 설명해줘."
+    instruction: "관심 지역 아파트 가격/거래량 지표를 전일·전주 기준으로 설명해줘. 가격은 반드시 억 원 단위로 표현해줘."
   - id: "insights"
     title: "기타 인사이트"
     instruction: "이상 변동 지역, 거래량 변화, 해석 시 유의사항을 간결하게 정리해줘."

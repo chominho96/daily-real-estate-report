@@ -129,7 +129,13 @@ class DailyReportPipeline:
             return base
 
         if section.id == "price_trend":
-            base["metrics"] = [asdict(metric) for metric in market_metrics]
+            base["metrics"] = [
+                {
+                    **asdict(metric),
+                    "current_avg_price_eok": round(metric.current_avg_price / 10000.0, 4),
+                }
+                for metric in market_metrics
+            ]
             return base
 
         if section.id == "insights":
