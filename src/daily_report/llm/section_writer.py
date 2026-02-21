@@ -51,20 +51,43 @@ class SectionWriter:
 
         try:
             client = OpenAI(api_key=api_key)
-            response = client.responses.create(
-                model=self._llm_config.model,
-                temperature=self._llm_config.temperature,
-                input=prompt,
-            )
+            response = self._create_response(client=client, prompt=prompt, use_temperature=True)
             text = str(getattr(response, "output_text", "") or "").strip()
             if not text:
                 text = self._extract_text_from_response(response)
             return text
         except Exception as exc:
+            if self._is_unsupported_temperature_error(exc):
+                self._log(f"section={section.id} llm=retry_without_temperature")
+                try:
+                    response = self._create_response(client=client, prompt=prompt, use_temperature=False)
+                    text = str(getattr(response, "output_text", "") or "").strip()
+                    if not text:
+                        text = self._extract_text_from_response(response)
+                    return text
+                except Exception as retry_exc:
+                    self._log(f"section={section.id} llm=error type={type(retry_exc).__name__} detail={retry_exc}")
+                    if self._debug:
+                        self._log(traceback.format_exc().rstrip())
+                    return ""
+
             self._log(f"section={section.id} llm=error type={type(exc).__name__} detail={exc}")
             if self._debug:
                 self._log(traceback.format_exc().rstrip())
             return ""
+
+    def _create_response(self, client: Any, prompt: str, use_temperature: bool) -> Any:
+        params: dict[str, Any] = {
+            "model": self._llm_config.model,
+            "input": prompt,
+        }
+        if use_temperature:
+            params["temperature"] = self._llm_config.temperature
+        return client.responses.create(**params)
+
+    def _is_unsupported_temperature_error(self, exc: Exception) -> bool:
+        message = str(exc)
+        return "Unsupported parameter: 'temperature'" in message
 
     def _extract_text_from_response(self, response: Any) -> str:
         output_items = getattr(response, "output", None)
