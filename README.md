@@ -90,6 +90,23 @@ Runtime behavior:
 - Parses XML `<item>` records and aggregates daily average deal price + transaction count.
 - If API settings are missing or request fails, synthetic sample data is used automatically.
 
+## News Source (Naver)
+
+Configure in `config/report.yaml`:
+
+```yaml
+news:
+  provider: "naver"
+  naver_client_id_env: "NAVER_NEWS_CLIENT_ID"
+  naver_client_secret_env: "NAVER_NEWS_CLIENT_SECRET"
+  naver_sort: "date"
+```
+
+Runtime behavior:
+
+- Uses Naver News Search OpenAPI first.
+- If Naver credentials are missing or request fails, falls back to Google News RSS.
+
 Reference note:
 
 - `real-estate-mcp` should be used only as a reference for endpoint/parameter patterns.
@@ -113,4 +130,6 @@ Required repo setup:
 
 1. Add repository secret: `OPENAI_API_KEY` (optional).
 2. Add repository secret: `MOLIT_API_SERVICE_KEY` (required if `real_estate_api.enabled=true`).
-3. Enable GitHub Pages with "GitHub Actions" source.
+3. Add repository secret: `NAVER_NEWS_CLIENT_ID` (required for Naver news source).
+4. Add repository secret: `NAVER_NEWS_CLIENT_SECRET` (required for Naver news source).
+5. Enable GitHub Pages with "GitHub Actions" source.

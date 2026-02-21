@@ -7,7 +7,12 @@ llm:
   temperature: 0.2
 
 news:
+  provider: "naver"
   max_items: 12
+  timeout_sec: 10
+  naver_client_id_env: "NAVER_NEWS_CLIENT_ID"
+  naver_client_secret_env: "NAVER_NEWS_CLIENT_SECRET"
+  naver_sort: "date"
   queries:
     - "부동산 정책"
     - "주택담보대출 규제"

@@ -68,8 +68,13 @@ def load_report_config(path: Path) -> ReportConfig:
             temperature=float(llm_cfg.get("temperature", 0.2)),
         ),
         news=NewsConfig(
+            provider=str(news_cfg.get("provider", "naver")).strip().lower(),
             max_items=int(news_cfg.get("max_items", 12)),
             queries=[str(query) for query in news_cfg.get("queries", [])],
+            timeout_sec=int(news_cfg.get("timeout_sec", 10)),
+            naver_client_id_env=str(news_cfg.get("naver_client_id_env", "NAVER_NEWS_CLIENT_ID")).strip(),
+            naver_client_secret_env=str(news_cfg.get("naver_client_secret_env", "NAVER_NEWS_CLIENT_SECRET")).strip(),
+            naver_sort=str(news_cfg.get("naver_sort", "date")).strip(),
         ),
         real_estate_api=RealEstateAPIConfig(
             enabled=bool(real_estate_api_cfg.get("enabled", False)),

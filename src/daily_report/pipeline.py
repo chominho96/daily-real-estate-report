@@ -49,8 +49,7 @@ class DailyReportPipeline:
         news_items = fetch_policy_news(
             start=report_window.start,
             end=report_window.end,
-            queries=report_cfg.news.queries,
-            max_items=report_cfg.news.max_items,
+            news_cfg=report_cfg.news,
         )
 
         market_points, market_data_mode = fetch_market_points(

@@ -28,8 +28,13 @@ class LLMConfig:
 
 @dataclass
 class NewsConfig:
+    provider: str
     max_items: int
     queries: list[str]
+    timeout_sec: int
+    naver_client_id_env: str
+    naver_client_secret_env: str
+    naver_sort: str
 
 
 @dataclass
