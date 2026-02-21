@@ -96,8 +96,13 @@ jobs:
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           NOW_KST=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')
+          TODAY_KST=$(TZ=Asia/Seoul date '+%Y-%m-%d')
           BASE_URL="${PAGE_URL%/}/"
-          REPORT_URL="${BASE_URL}reports/${REPORT_SLUG}/"
+          REPORT_DAY="${REPORT_SLUG:0:10}"
+          if [[ -z "$REPORT_DAY" ]]; then
+            REPORT_DAY="$TODAY_KST"
+          fi
+          REPORT_URL="${BASE_URL}reports/${REPORT_DAY}/"
 
           payload=$(cat <<EOF
           {
@@ -106,7 +111,7 @@ jobs:
               {
                 "title": "보고서 보러가기",
                 "url": "${REPORT_URL}",
-                "description": "생성 시각(KST): ${NOW_KST}\n사이트 홈: ${PAGE_URL}\n워크플로우 로그: ${RUN_URL}",
+                "description": "생성 시각(KST): ${NOW_KST}\n보고서 링크: ${REPORT_URL}\n사이트 홈: ${PAGE_URL}\n워크플로우 로그: ${RUN_URL}",
                 "color": 3066993
               }
             ]
