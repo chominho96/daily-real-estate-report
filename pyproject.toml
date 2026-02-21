@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daily-real-estate-report"
+version = "0.1.0"
+description = "Daily real-estate market report generator"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "PyYAML>=6.0.1",
+  "feedparser>=6.0.11",
+  "python-dateutil>=2.9.0",
+  "openai>=1.60.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mkdocs>=1.6.0",
+  "mkdocs-material>=9.5.0",
+]
+
+[project.scripts]
+daily-report = "daily_report.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

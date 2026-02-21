@@ -1,0 +1,47 @@
+{
+  "timezone": "Asia/Seoul",
+  "language": "ko",
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-5-mini",
+    "temperature": 0.2
+  },
+  "news": {
+    "max_items": 12,
+    "queries": [
+      "Korea real estate policy",
+      "Korea mortgage regulation",
+      "Korea housing supply plan"
+    ]
+  },
+  "real_estate_api": {
+    "enabled": true,
+    "base_url": "https://apis.data.go.kr",
+    "service_key_env": "MOLIT_API_SERVICE_KEY",
+    "timeout_sec": 20,
+    "num_rows": 1000,
+    "lawd_code_digits": 5,
+    "endpoint_by_asset": {
+      "apartment": "/1613000/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev",
+      "villa": "/1613000/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade",
+      "officetel": "/1613000/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade"
+    }
+  },
+  "sections": [
+    {
+      "id": "policy_news",
+      "title": "Policy News (last run to now)",
+      "instruction": "Summarize key policy/regulation news with practical impact for buyers, owners, and investors."
+    },
+    {
+      "id": "price_trend",
+      "title": "Price Trend by Region and Asset",
+      "instruction": "Explain day-over-day and week-over-week signals from apartment, villa, and officetel metrics for tracked regions."
+    },
+    {
+      "id": "insights",
+      "title": "Additional Market Insights",
+      "instruction": "Provide concise insights from unusual movers, transaction volume changes, and caveats."
+    }
+  ]
+}

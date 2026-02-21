@@ -1,0 +1,22 @@
+{
+  "regions": [
+    {
+      "name": "Seoul Gangnam-gu Daechi-dong",
+      "code": "1168010600",
+      "enabled": true,
+      "assets": ["apartment", "villa", "officetel"]
+    },
+    {
+      "name": "Seoul Songpa-gu Jamsil-dong",
+      "code": "1171010100",
+      "enabled": true,
+      "assets": ["apartment", "officetel"]
+    },
+    {
+      "name": "Gyeonggi Seongnam-si Bundang-gu Jeongja-dong",
+      "code": "4113510300",
+      "enabled": false,
+      "assets": ["apartment", "officetel"]
+    }
+  ]
+}
