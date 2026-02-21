@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import traceback
 from typing import Any
 
 from daily_report.models import LLMConfig, SectionConfig
@@ -11,13 +13,21 @@ class SectionWriter:
     def __init__(self, llm_config: LLMConfig, language: str) -> None:
         self._llm_config = llm_config
         self._language = language
+        self._debug = os.getenv("LLM_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+        self._strict = os.getenv("LLM_STRICT", "").strip().lower() in {"1", "true", "yes", "on"}
 
     def write(self, section: SectionConfig, context: dict[str, Any]) -> str:
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
         if api_key:
             rendered = self._write_with_openai(section=section, context=context, api_key=api_key)
             if rendered:
+                self._log(f"section={section.id} llm=success")
                 return rendered
+            self._log(f"section={section.id} llm=empty_response_fallback")
+            if self._strict:
+                raise RuntimeError(f"LLM generation returned empty text for section: {section.id}")
+        else:
+            self._log(f"section={section.id} llm=missing_api_key_fallback")
 
         return self._write_fallback(section=section, context=context)
 
@@ -46,10 +56,41 @@ class SectionWriter:
                 temperature=self._llm_config.temperature,
                 input=prompt,
             )
-            text = response.output_text.strip()
+            text = str(getattr(response, "output_text", "") or "").strip()
+            if not text:
+                text = self._extract_text_from_response(response)
             return text
-        except Exception:
+        except Exception as exc:
+            self._log(f"section={section.id} llm=error type={type(exc).__name__} detail={exc}")
+            if self._debug:
+                self._log(traceback.format_exc().rstrip())
             return ""
+
+    def _extract_text_from_response(self, response: Any) -> str:
+        output_items = getattr(response, "output", None)
+        if not output_items:
+            return ""
+
+        chunks: list[str] = []
+        for item in output_items:
+            content_items = getattr(item, "content", None)
+            if content_items is None and isinstance(item, dict):
+                content_items = item.get("content")
+            if not content_items:
+                continue
+
+            for content in content_items:
+                text = getattr(content, "text", None)
+                if text is None and isinstance(content, dict):
+                    text = content.get("text")
+                if text:
+                    chunks.append(str(text))
+
+        return "\n".join(chunks).strip()
+
+    def _log(self, message: str) -> None:
+        if self._debug:
+            print(f"[LLM] {message}", file=sys.stderr)
 
     def _write_fallback(self, section: SectionConfig, context: dict[str, Any]) -> str:
         asset_map = {

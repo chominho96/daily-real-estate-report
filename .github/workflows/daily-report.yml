@@ -49,6 +49,8 @@ jobs:
           MOLIT_API_SERVICE_KEY: ${{ secrets.MOLIT_API_SERVICE_KEY }}
           NAVER_NEWS_CLIENT_ID: ${{ secrets.NAVER_NEWS_CLIENT_ID }}
           NAVER_NEWS_CLIENT_SECRET: ${{ secrets.NAVER_NEWS_CLIENT_SECRET }}
+          LLM_DEBUG: ${{ vars.LLM_DEBUG }}
+          LLM_STRICT: ${{ vars.LLM_STRICT }}
         run: |
           REPORT_PATH=$(daily-report --root .)
           echo "report_path=${REPORT_PATH}" >> "$GITHUB_OUTPUT"
