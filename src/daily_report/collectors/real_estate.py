@@ -79,15 +79,19 @@ def _fetch_market_points_via_public_api(
     monthly_buckets: dict[tuple[str, str, str, date], list[float]] = defaultdict(list)
     has_error = False
     last_error: str | None = None
+    expected_pairs: set[tuple[str, str]] = set()
+    region_name_by_code: dict[str, str] = {}
 
     for region in regions:
         lawd_code = region.code[: max(1, api_config.lawd_code_digits)]
+        region_name_by_code[region.code] = region.name
 
         for asset in region.assets:
             endpoint = api_config.endpoint_by_asset.get(asset, "").strip()
             if not endpoint:
                 _log_api_debug(f"public_api missing_endpoint asset={asset}")
                 continue
+            expected_pairs.add((region.code, asset))
 
             for yyyymm in _iter_yyyymm(start.date(), end.date()):
                 params = {
@@ -105,13 +109,18 @@ def _fetch_market_points_via_public_api(
                     _log_api_debug(
                         f"public_api request_error asset={asset} lawd={lawd_code} yyyymm={yyyymm} msg={error_message}"
                     )
+                else:
+                    _log_api_debug(
+                        f"public_api request_ok asset={asset} lawd={lawd_code} yyyymm={yyyymm} items={len(items)}"
+                    )
                 for item in items:
                     parsed = _parse_trade_item(item=item, tzinfo=start.tzinfo)
                     if parsed is None:
                         continue
 
                     observed_at, deal_price = parsed
-                    if not (start <= observed_at <= end):
+                    # Public trade data is date-level while report window has time precision.
+                    if not (start.date() <= observed_at.date() <= end.date()):
                         continue
 
                     key = (region.name, region.code, asset, observed_at.date())
@@ -135,8 +144,19 @@ def _fetch_market_points_via_public_api(
         )
 
     points.sort(key=lambda x: (x.observed_at, x.region_code, x.asset))
+    observed_pairs = {(point.region_code, point.asset) for point in points}
+    missing_pairs = sorted(expected_pairs - observed_pairs)
+
+    if missing_pairs:
+        missing_label = ", ".join(
+            f"{region_name_by_code.get(code, code)}:{asset}" for code, asset in missing_pairs
+        )
+        _log_api_debug(f"public_api missing_pairs={missing_label}")
+
     _log_api_debug(
-        f"public_api summary points={len(points)} regions={len(regions)} window={start.date()}~{end.date()}"
+        "public_api summary "
+        f"points={len(points)} regions={len(regions)} expected_pairs={len(expected_pairs)} "
+        f"observed_pairs={len(observed_pairs)} window={start.date()}~{end.date()}"
     )
     return points, has_error, last_error
 

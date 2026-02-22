@@ -16,6 +16,7 @@ from daily_report.render.markdown import render_docs_index, render_fixed_report
 from daily_report.settings import load_regions, load_report_config
 
 DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
+MIN_MARKET_HISTORY_DAYS = 30
 
 
 def _fmt_dt(value: datetime) -> str:
@@ -43,7 +44,11 @@ class DailyReportPipeline:
             last_run = datetime.combine(previous_day, time.min, tzinfo=tz)
 
         report_window = ReportWindow(start=last_run, end=now)
-        market_start = report_window.start - timedelta(days=8)
+        # Ensure enough history for stable day/week comparisons even when runs are frequent.
+        market_start = min(
+            report_window.start - timedelta(days=8),
+            report_window.end - timedelta(days=MIN_MARKET_HISTORY_DAYS),
+        )
 
         enabled_regions = [region for region in regions if region.enabled]
 
