@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
@@ -25,7 +25,7 @@ def fetch_market_points(
     strict = _is_api_strict()
 
     if api_config.enabled:
-        points, has_error = _fetch_market_points_via_public_api(
+        points, has_error, last_error = _fetch_market_points_via_public_api(
             regions=regions,
             start=start,
             end=end,
@@ -34,6 +34,7 @@ def fetch_market_points(
         if strict and has_error:
             raise RuntimeError(
                 "Public API request failed. "
+                f"last_error={last_error or 'unknown'}. "
                 "Enable REAL_ESTATE_API_DEBUG=true to inspect detailed request errors."
             )
         if points:
@@ -42,7 +43,7 @@ def fetch_market_points(
         # Retry with extended window to reduce "no data" cases caused by reporting lag.
         extended_start = end - timedelta(days=90)
         if extended_start < start:
-            retry_points, retry_error = _fetch_market_points_via_public_api(
+            retry_points, retry_error, retry_last_error = _fetch_market_points_via_public_api(
                 regions=regions,
                 start=extended_start,
                 end=end,
@@ -55,6 +56,7 @@ def fetch_market_points(
             if strict and has_error:
                 raise RuntimeError(
                     "Public API request failed during extended-window retry. "
+                    f"last_error={retry_last_error or last_error or 'unknown'}. "
                     "Enable REAL_ESTATE_API_DEBUG=true to inspect detailed request errors."
                 )
 
@@ -68,14 +70,15 @@ def _fetch_market_points_via_public_api(
     start: datetime,
     end: datetime,
     api_config: RealEstateAPIConfig,
-) -> tuple[list[MarketPoint], bool]:
-    service_key = os.getenv(api_config.service_key_env, "").strip()
+) -> tuple[list[MarketPoint], bool, str | None]:
+    service_key = _normalize_service_key(os.getenv(api_config.service_key_env, "").strip())
     if not service_key:
         _log_api_debug(f"public_api missing_service_key env={api_config.service_key_env}")
-        return [], True
+        return [], True, f"missing_service_key env={api_config.service_key_env}"
 
     monthly_buckets: dict[tuple[str, str, str, date], list[float]] = defaultdict(list)
     has_error = False
+    last_error: str | None = None
 
     for region in regions:
         lawd_code = region.code[: max(1, api_config.lawd_code_digits)]
@@ -98,6 +101,7 @@ def _fetch_market_points_via_public_api(
                 items, error_message = _fetch_xml_items(endpoint=endpoint, params=params, api_config=api_config)
                 if error_message:
                     has_error = True
+                    last_error = error_message
                     _log_api_debug(
                         f"public_api request_error asset={asset} lawd={lawd_code} yyyymm={yyyymm} msg={error_message}"
                     )
@@ -134,7 +138,7 @@ def _fetch_market_points_via_public_api(
     _log_api_debug(
         f"public_api summary points={len(points)} regions={len(regions)} window={start.date()}~{end.date()}"
     )
-    return points, has_error
+    return points, has_error, last_error
 
 
 def _iter_yyyymm(start_date: date, end_date: date) -> Iterable[str]:
@@ -166,7 +170,7 @@ def _fetch_xml_items(
         with urlopen(request, timeout=api_config.timeout_sec) as resp:
             payload = resp.read()
     except HTTPError as exc:
-        return [], f"http_error status={getattr(exc, 'code', 'unknown')}"
+        return [], _format_http_error(exc)
     except URLError as exc:
         return [], f"url_error reason={getattr(exc, 'reason', 'unknown')}"
     except (TimeoutError, ValueError) as exc:
@@ -190,6 +194,27 @@ def _extract_xml_text(root: ElementTree.Element, xpath: str) -> str:
     if node is None or node.text is None:
         return ""
     return node.text.strip()
+
+
+def _normalize_service_key(raw_key: str) -> str:
+    if not raw_key:
+        return ""
+    # data.go.kr keys are often provided URL-encoded. Normalize to decoded form,
+    # then let urlencode() encode once to avoid double-encoding 403 failures.
+    return unquote(raw_key).strip()
+
+
+def _format_http_error(exc: HTTPError) -> str:
+    status = getattr(exc, "code", "unknown")
+    body = ""
+    try:
+        body = exc.read().decode("utf-8", errors="ignore").strip()
+    except Exception:
+        body = ""
+    if body:
+        body = re.sub(r"\s+", " ", body)
+        body = body[:280]
+    return f"http_error status={status}" + (f" body={body}" if body else "")
 
 
 def _log_api_debug(message: str) -> None:
