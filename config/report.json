@@ -27,7 +27,7 @@
     "num_rows": 1000,
     "lawd_code_digits": 5,
     "endpoint_by_asset": {
-      "apartment": "/1613000/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev",
+      "apartment": "/1613000/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade",
       "villa": "/1613000/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade",
       "officetel": "/1613000/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade"
     }
