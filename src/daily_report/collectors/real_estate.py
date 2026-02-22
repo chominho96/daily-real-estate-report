@@ -183,7 +183,7 @@ def _fetch_xml_items(
 
     result_code = _extract_xml_text(root, ".//header/resultCode")
     result_msg = _extract_xml_text(root, ".//header/resultMsg")
-    if result_code and result_code != "00":
+    if not _is_success_result_code(result_code):
         return [], f"api_result_error code={result_code} msg={result_msg or '-'}"
 
     return list(root.findall(".//item")), None
@@ -194,6 +194,19 @@ def _extract_xml_text(root: ElementTree.Element, xpath: str) -> str:
     if node is None or node.text is None:
         return ""
     return node.text.strip()
+
+
+def _is_success_result_code(result_code: str) -> bool:
+    code = result_code.strip()
+    if not code:
+        return True
+
+    # Some public APIs use "00", others use "000" (or other zero-padded variants)
+    # to represent success.
+    try:
+        return int(code) == 0
+    except ValueError:
+        return False
 
 
 def _normalize_service_key(raw_key: str) -> str:
