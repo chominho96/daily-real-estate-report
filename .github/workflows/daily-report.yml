@@ -51,6 +51,8 @@ jobs:
           NAVER_NEWS_CLIENT_SECRET: ${{ secrets.NAVER_NEWS_CLIENT_SECRET }}
           LLM_DEBUG: ${{ vars.LLM_DEBUG }}
           LLM_STRICT: ${{ vars.LLM_STRICT }}
+          REAL_ESTATE_API_DEBUG: ${{ vars.REAL_ESTATE_API_DEBUG }}
+          REAL_ESTATE_API_STRICT: ${{ vars.REAL_ESTATE_API_STRICT }}
         run: |
           REPORT_PATH=$(daily-report --root .)
           echo "report_path=${REPORT_PATH}" >> "$GITHUB_OUTPUT"

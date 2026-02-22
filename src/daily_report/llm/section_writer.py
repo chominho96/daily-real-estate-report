@@ -64,6 +64,18 @@ class SectionWriter:
                 "표는 작성하지 말고 해석 코멘트만 3~5개 불릿으로 작성하세요. "
                 "데이터 요청 문장(예: 데이터를 제공해 주시면)은 금지합니다."
             )
+        if section.id == "insights":
+            prompt += (
+                "\n\n추가 규칙: 아래 구조를 정확히 지켜 작성하세요."
+                "\n- 주요 변동 지역"
+                "\n  - (하위 항목은 반드시 2칸 들여쓰기한 불릿 사용)"
+                "\n- 거래량 변화"
+                "\n  - (하위 항목은 반드시 2칸 들여쓰기한 불릿 사용)"
+                "\n- 해석 시 유의사항"
+                "\n  - (하위 항목은 반드시 2칸 들여쓰기한 불릿 사용)"
+                "\n본문 단락만 단독으로 쓰지 말고, 모든 항목은 불릿 구조로 작성하세요."
+                "\n대화체(예: 알려주시면, 해드리겠습니다) 문장은 금지합니다."
+            )
 
         try:
             client = OpenAI(api_key=api_key)
@@ -184,6 +196,10 @@ class SectionWriter:
             data_mode = str(context.get("market_data_mode", ""))
             if data_mode == "public_api_empty":
                 lines.append("- 참고: 이번 집계 구간에는 공공 API에 매칭된 실거래 데이터가 없어 지표가 제한될 수 있습니다.")
+            elif data_mode == "public_api_error":
+                lines.append("- 참고: 공공 API 호출 중 오류가 발생해 시세 지표를 계산하지 못했습니다. API 키/응답 코드 점검이 필요합니다.")
+            elif data_mode == "public_api_extended":
+                lines.append("- 참고: 기본 집계 구간 데이터가 부족하여 최근 90일 확장 조회 결과를 사용했습니다.")
             elif data_mode == "synthetic":
                 lines.append("- 참고: 공공 API 설정이 없거나 응답 오류가 있어 샘플 데이터로 대체되었습니다.")
             return "\n".join(lines)
@@ -223,6 +239,8 @@ class SectionWriter:
             sanitized = self._normalize_policy_indentation(sanitized)
         if section.id == "price_trend":
             sanitized = self._strip_markdown_table_blocks(sanitized)
+        if section.id == "insights":
+            sanitized = self._normalize_insights_indentation(sanitized)
 
         return sanitized.strip()
 
@@ -276,3 +294,55 @@ class SectionWriter:
                 continue
             kept.append(raw)
         return "\n".join(kept).strip()
+
+    def _normalize_insights_indentation(self, text: str) -> str:
+        if not text:
+            return text
+
+        parent_aliases = {
+            "주요 변동 지역": "주요 변동 지역",
+            "거래량 변화": "거래량 변화",
+            "해석 시 유의사항": "해석 시 유의사항",
+        }
+
+        def _to_parent_label(stripped: str) -> str:
+            base = stripped
+            if base.startswith("- "):
+                base = base[2:].strip()
+            if base.startswith("※"):
+                base = base[1:].strip()
+            if base.endswith(":"):
+                base = base[:-1].strip()
+            return parent_aliases.get(base, "")
+
+        out: list[str] = []
+        inside_parent = False
+        for raw in text.splitlines():
+            stripped = raw.strip()
+
+            if not stripped:
+                continue
+
+            if stripped.startswith("## "):
+                continue
+
+            parent_label = _to_parent_label(stripped)
+            if parent_label:
+                out.append(f"- {parent_label}")
+                inside_parent = True
+                continue
+
+            if stripped.startswith("- "):
+                if inside_parent:
+                    out.append(f"  {stripped}")
+                else:
+                    out.append(stripped)
+                continue
+
+            # Force plain sentences under the latest parent as child bullets.
+            if inside_parent:
+                out.append(f"  - {stripped}")
+            else:
+                out.append(f"- {stripped}")
+
+        return "\n".join(out).strip()

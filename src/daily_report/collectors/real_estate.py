@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import random
 import re
+import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Iterable
@@ -20,16 +22,43 @@ def fetch_market_points(
     end: datetime,
     api_config: RealEstateAPIConfig,
 ) -> tuple[list[MarketPoint], str]:
+    strict = _is_api_strict()
+
     if api_config.enabled:
-        points = _fetch_market_points_via_public_api(
+        points, has_error = _fetch_market_points_via_public_api(
             regions=regions,
             start=start,
             end=end,
             api_config=api_config,
         )
+        if strict and has_error:
+            raise RuntimeError(
+                "Public API request failed. "
+                "Enable REAL_ESTATE_API_DEBUG=true to inspect detailed request errors."
+            )
         if points:
             return points, "public_api"
-        return [], "public_api_empty"
+
+        # Retry with extended window to reduce "no data" cases caused by reporting lag.
+        extended_start = end - timedelta(days=90)
+        if extended_start < start:
+            retry_points, retry_error = _fetch_market_points_via_public_api(
+                regions=regions,
+                start=extended_start,
+                end=end,
+                api_config=api_config,
+            )
+            if retry_points:
+                _log_api_debug("public_api retry_window=90d status=success")
+                return retry_points, "public_api_extended"
+            has_error = has_error or retry_error
+            if strict and has_error:
+                raise RuntimeError(
+                    "Public API request failed during extended-window retry. "
+                    "Enable REAL_ESTATE_API_DEBUG=true to inspect detailed request errors."
+                )
+
+        return [], "public_api_error" if has_error else "public_api_empty"
 
     return _build_synthetic_market_points(regions=regions, start=start, end=end), "synthetic"
 
@@ -39,14 +68,14 @@ def _fetch_market_points_via_public_api(
     start: datetime,
     end: datetime,
     api_config: RealEstateAPIConfig,
-) -> list[MarketPoint]:
-    import os
-
+) -> tuple[list[MarketPoint], bool]:
     service_key = os.getenv(api_config.service_key_env, "").strip()
     if not service_key:
-        return []
+        _log_api_debug(f"public_api missing_service_key env={api_config.service_key_env}")
+        return [], True
 
     monthly_buckets: dict[tuple[str, str, str, date], list[float]] = defaultdict(list)
+    has_error = False
 
     for region in regions:
         lawd_code = region.code[: max(1, api_config.lawd_code_digits)]
@@ -54,6 +83,7 @@ def _fetch_market_points_via_public_api(
         for asset in region.assets:
             endpoint = api_config.endpoint_by_asset.get(asset, "").strip()
             if not endpoint:
+                _log_api_debug(f"public_api missing_endpoint asset={asset}")
                 continue
 
             for yyyymm in _iter_yyyymm(start.date(), end.date()):
@@ -65,7 +95,12 @@ def _fetch_market_points_via_public_api(
                     "pageNo": "1",
                 }
 
-                items = _fetch_xml_items(endpoint=endpoint, params=params, api_config=api_config)
+                items, error_message = _fetch_xml_items(endpoint=endpoint, params=params, api_config=api_config)
+                if error_message:
+                    has_error = True
+                    _log_api_debug(
+                        f"public_api request_error asset={asset} lawd={lawd_code} yyyymm={yyyymm} msg={error_message}"
+                    )
                 for item in items:
                     parsed = _parse_trade_item(item=item, tzinfo=start.tzinfo)
                     if parsed is None:
@@ -96,7 +131,10 @@ def _fetch_market_points_via_public_api(
         )
 
     points.sort(key=lambda x: (x.observed_at, x.region_code, x.asset))
-    return points
+    _log_api_debug(
+        f"public_api summary points={len(points)} regions={len(regions)} window={start.date()}~{end.date()}"
+    )
+    return points, has_error
 
 
 def _iter_yyyymm(start_date: date, end_date: date) -> Iterable[str]:
@@ -111,7 +149,11 @@ def _iter_yyyymm(start_date: date, end_date: date) -> Iterable[str]:
             cursor = date(cursor.year, cursor.month + 1, 1)
 
 
-def _fetch_xml_items(endpoint: str, params: dict[str, str], api_config: RealEstateAPIConfig) -> list[ElementTree.Element]:
+def _fetch_xml_items(
+    endpoint: str,
+    params: dict[str, str],
+    api_config: RealEstateAPIConfig,
+) -> tuple[list[ElementTree.Element], str | None]:
     if endpoint.startswith("http://") or endpoint.startswith("https://"):
         base = endpoint
     else:
@@ -123,15 +165,41 @@ def _fetch_xml_items(endpoint: str, params: dict[str, str], api_config: RealEsta
     try:
         with urlopen(request, timeout=api_config.timeout_sec) as resp:
             payload = resp.read()
-    except (HTTPError, URLError, TimeoutError, ValueError):
-        return []
+    except HTTPError as exc:
+        return [], f"http_error status={getattr(exc, 'code', 'unknown')}"
+    except URLError as exc:
+        return [], f"url_error reason={getattr(exc, 'reason', 'unknown')}"
+    except (TimeoutError, ValueError) as exc:
+        return [], f"request_error type={type(exc).__name__}"
 
     try:
         root = ElementTree.fromstring(payload)
     except ElementTree.ParseError:
-        return []
+        return [], "xml_parse_error"
 
-    return list(root.findall(".//item"))
+    result_code = _extract_xml_text(root, ".//header/resultCode")
+    result_msg = _extract_xml_text(root, ".//header/resultMsg")
+    if result_code and result_code != "00":
+        return [], f"api_result_error code={result_code} msg={result_msg or '-'}"
+
+    return list(root.findall(".//item")), None
+
+
+def _extract_xml_text(root: ElementTree.Element, xpath: str) -> str:
+    node = root.find(xpath)
+    if node is None or node.text is None:
+        return ""
+    return node.text.strip()
+
+
+def _log_api_debug(message: str) -> None:
+    enabled = os.getenv("REAL_ESTATE_API_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+    if enabled:
+        print(f"[RE_API] {message}", file=sys.stderr)
+
+
+def _is_api_strict() -> bool:
+    return os.getenv("REAL_ESTATE_API_STRICT", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_trade_item(item: ElementTree.Element, tzinfo) -> tuple[datetime, float] | None:
