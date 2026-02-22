@@ -27,3 +27,4 @@ data/processed/*.json
 
 # OS
 .DS_Store
+.idea/*
