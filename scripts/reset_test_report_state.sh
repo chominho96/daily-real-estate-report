@@ -6,23 +6,26 @@ REPORTS_DIR="${ROOT_DIR}/docs/reports"
 INDEX_FILE="${ROOT_DIR}/docs/index.md"
 STATE_FILE="${ROOT_DIR}/state/last_run.json"
 
-TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%Y-%m-%d)}"
-TZ_OFFSET="${2:-+09:00}"
+TZ_OFFSET="${1:-+09:00}"
 
 if [[ ! -d "${REPORTS_DIR}" ]]; then
   echo "reports directory not found: ${REPORTS_DIR}" >&2
   exit 1
 fi
 
-shopt -s nullglob
-TARGET_FILES=("${REPORTS_DIR}/${TARGET_DATE}.md" "${REPORTS_DIR}/${TARGET_DATE}-"*.md)
-if (( ${#TARGET_FILES[@]} > 0 )); then
-  rm -f "${TARGET_FILES[@]}"
-  echo "removed ${#TARGET_FILES[@]} report file(s) for ${TARGET_DATE}"
-else
-  echo "no report files found for ${TARGET_DATE}"
+REPORT_FILES=()
+while IFS= read -r report_file; do
+  REPORT_FILES+=("${report_file}")
+done < <(find "${REPORTS_DIR}" -maxdepth 1 -type f -name "*.md" ! -name ".gitkeep" -print | sort -r)
+
+if (( ${#REPORT_FILES[@]} == 0 )); then
+  echo "no report files found under ${REPORTS_DIR}" >&2
+  exit 1
 fi
-shopt -u nullglob
+
+DELETED_REPORT="${REPORT_FILES[0]}"
+rm -f "${DELETED_REPORT}"
+echo "removed latest report: $(basename "${DELETED_REPORT}")"
 
 REPORT_FILES=()
 while IFS= read -r report_file; do
