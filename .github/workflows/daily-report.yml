@@ -53,7 +53,7 @@ jobs:
       - name: Generate daily report
         id: generate_report
         env:
-          OPENAI_API_KEY: ${{ secrets.CODEX_CLI_KEY || secrets.OPENAI_API_KEY }}
+          CODEX_CLI_KEY: ${{ secrets.CODEX_CLI_KEY }}
           MOLIT_API_SERVICE_KEY: ${{ secrets.MOLIT_API_SERVICE_KEY }}
           NAVER_NEWS_CLIENT_ID: ${{ secrets.NAVER_NEWS_CLIENT_ID }}
           NAVER_NEWS_CLIENT_SECRET: ${{ secrets.NAVER_NEWS_CLIENT_SECRET }}
@@ -65,6 +65,12 @@ jobs:
           REAL_ESTATE_API_STRICT: ${{ vars.REAL_ESTATE_API_STRICT }}
         run: |
           mkdir -p "$CODEX_HOME"
+          if [[ -z "${CODEX_CLI_KEY}" ]]; then
+            echo "CODEX_CLI_KEY secret is required (expected auth.json payload)." >&2
+            exit 1
+          fi
+          printf '%s' "$CODEX_CLI_KEY" > "$CODEX_HOME/auth.json"
+          chmod 600 "$CODEX_HOME/auth.json"
           REPORT_PATH=$(daily-report --root .)
           echo "report_path=${REPORT_PATH}" >> "$GITHUB_OUTPUT"
 
