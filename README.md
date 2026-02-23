@@ -122,7 +122,9 @@ Local prerequisite:
 npm install -g @openai/codex
 ```
 
-Set `OPENAI_API_KEY` to enable Codex CLI authentication in non-interactive environments (e.g. GitHub Actions).
+Set `CODEX_CLI_KEY` (or `OPENAI_API_KEY`) to enable Codex CLI authentication in non-interactive environments (e.g. GitHub Actions).
+
+Note: GitHub-hosted Actions generally use API-key authentication, which follows API billing rules.
 
 - Without API key, deterministic fallback section text is used.
 - With API key, each section prompt is generated independently and injected into fixed report template through Codex CLI.
@@ -136,7 +138,7 @@ Workflow: `.github/workflows/daily-report.yml`
 
 Required repo setup:
 
-1. Add repository secret: `OPENAI_API_KEY` (required for automated LLM generation).
+1. Add repository secret: `CODEX_CLI_KEY` (recommended) or `OPENAI_API_KEY` for automated LLM generation.
 2. Add repository secret: `MOLIT_API_SERVICE_KEY` (required if `real_estate_api.enabled=true`).
 3. Add repository secret: `NAVER_NEWS_CLIENT_ID` (required for Naver news source).
 4. Add repository secret: `NAVER_NEWS_CLIENT_SECRET` (required for Naver news source).

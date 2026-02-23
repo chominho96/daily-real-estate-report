@@ -44,6 +44,8 @@ class SectionWriter:
         command: list[str] = [
             self._codex_bin,
             "exec",
+            "-c",
+            'approval_policy="never"',
             "--sandbox",
             "read-only",
             "--ephemeral",
