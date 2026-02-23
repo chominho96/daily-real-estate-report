@@ -1,143 +1,101 @@
 # daily-real-estate-report
 
-Daily real-estate market report pipeline with fixed report format and section-wise content generation.
+대한민국 부동산 일일 시황 리포트를 자동 생성하고 GitHub Pages로 배포하는 프로젝트입니다.
 
-## Core Design
+## 개요
 
-- The report structure is fixed.
-- Each section body is generated independently (LLM hook enabled).
-- Regions are fully configurable from `config/regions.yaml` (no code edits).
-- Real-estate data is collected by this repository's own API client.
-- Scheduled by GitHub Actions and published as a mobile-friendly static site with MkDocs + GitHub Pages.
+- 리포트 구조는 고정 템플릿이며 섹션 본문만 생성합니다.
+- 정책 뉴스, 가격 추이, 기타 인사이트 3개 섹션을 매일 생성합니다.
+- 실거래 데이터는 공공 API를 직접 호출합니다.
+- LLM 생성은 OpenAI SDK 직접 호출이 아니라 Codex CLI(`codex exec`)를 사용합니다.
+- 결과 문서는 MkDocs로 빌드되어 GitHub Pages에 배포됩니다.
 
-## Fixed Report Sections (v1)
+## 워크플로우 요약
 
-1. Policy news between last run and current run
-2. Price trend by region and asset (apartment/villa/officetel)
-3. Additional insights
+대상 파일: `.github/workflows/daily-report.yml`
 
-## Project Structure
+1. `Checkout`으로 저장소를 가져옵니다.
+2. Python/Node 환경을 준비하고 Codex CLI를 설치합니다.
+3. `CODEX_CLI_KEY`(auth.json 문자열)를 `$CODEX_HOME/auth.json`으로 복원합니다.
+4. `daily-report --root .` 실행으로 리포트를 생성합니다.
+5. 변경된 리포트/인덱스/상태 파일을 커밋 & 푸시합니다.
+6. MkDocs 빌드 후 Pages 아티팩트를 업로드합니다.
+7. 기본 브랜치에서 실행된 경우 GitHub Pages 배포와 Discord 알림을 수행합니다.
 
-```text
-.
-├── .github/workflows/daily-report.yml
-├── config/
-│   ├── regions.yaml
-│   └── report.yaml
-├── data/
-│   ├── processed/
-│   └── raw/
-├── docs/
-│   ├── index.md
-│   └── reports/
-├── state/last_run.json
-├── src/daily_report/
-│   ├── analysis/metrics.py
-│   ├── collectors/
-│   │   ├── news.py
-│   │   └── real_estate.py
-│   ├── llm/section_writer.py
-│   ├── render/markdown.py
-│   ├── main.py
-│   ├── models.py
-│   ├── pipeline.py
-│   └── settings.py
-└── mkdocs.yml
+## 워크플로우 사용 방법
+
+### 1) 필수 준비
+
+1. GitHub Pages Source를 `GitHub Actions`로 설정합니다.
+2. Repository Secrets를 추가합니다.
+3. Codex CLI 인증 정보(`CODEX_CLI_KEY`)를 최신 상태로 유지합니다.
+
+필수 Secret 목록:
+
+1. `CODEX_CLI_KEY` (`~/.codex/auth.json` 파일 전체 JSON 문자열)
+2. `MOLIT_API_SERVICE_KEY`
+3. `NAVER_NEWS_CLIENT_ID`
+4. `NAVER_NEWS_CLIENT_SECRET`
+
+권장 Variable 목록:
+
+1. `LLM_STRICT=true` (LLM 실패 시 워크플로우 실패)
+2. `LLM_CODEX_TIMEOUT_SEC=180`
+3. `LLM_DEBUG=true` (초기 점검 시)
+4. `REAL_ESTATE_API_STRICT=true`
+5. `REAL_ESTATE_API_DEBUG=true` (초기 점검 시)
+
+### 2) 수동 테스트 실행
+
+1. 변경 브랜치를 원격에 푸시합니다.
+2. GitHub Actions 탭에서 `Daily Real-Estate Report` 워크플로우를 수동 실행(`workflow_dispatch`)합니다.
+3. `generate-and-build` 로그에서 `[LLM] section=... llm=success` 여부를 확인합니다.
+
+참고: 현재 워크플로우 트리거는 `schedule` + `workflow_dispatch`이며, 단순 `push`로는 자동 실행되지 않습니다.
+
+## auth.json 갱신 가이드
+
+로컬에서 auth.json을 얻는 방법:
+
+```bash
+codex
+cat ~/.codex/auth.json
 ```
 
-## Quick Start
+수동으로 Secret 갱신:
+
+1. GitHub Repository > Settings > Secrets and variables > Actions
+2. `CODEX_CLI_KEY` 편집
+3. `~/.codex/auth.json` 전체 내용을 그대로 붙여넣기
+
+자동 갱신 스크립트:
+
+```bash
+./scripts/update_codex_cli_key_secret.sh
+```
+
+옵션:
+
+1. `./scripts/update_codex_cli_key_secret.sh /path/to/auth.json`
+2. `./scripts/update_codex_cli_key_secret.sh ~/.codex/auth.json owner/repo`
+
+요구사항:
+
+1. GitHub CLI(`gh`) 설치
+2. `gh auth login` 완료
+
+## 로컬 실행
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install .[dev]
-```
-
-Run once locally:
-
-```bash
 daily-report --root .
 ```
 
-Generated report path is printed to stdout.
+## 참고 파일
 
-## Region Management
-
-Edit only `config/regions.yaml`:
-
-- `enabled: true/false` to include/exclude region
-- `assets` to control apartment/villa/officetel per region
-- Optional fallback: `config/regions.json` and `config/report.json` are used when PyYAML is unavailable.
-
-## Public API Integration (Own Implementation)
-
-Set direct API client settings in `config/report.yaml`:
-
-```yaml
-real_estate_api:
-  enabled: true
-  base_url: "https://apis.data.go.kr"
-  service_key_env: "MOLIT_API_SERVICE_KEY"
-  endpoint_by_asset:
-    apartment: "<endpoint path or full url>"
-    villa: "<endpoint path or full url>"
-    officetel: "<endpoint path or full url>"
-```
-
-Runtime behavior:
-
-- Uses `serviceKey`, `LAWD_CD`, `DEAL_YMD`, `numOfRows`, `pageNo` style parameters.
-- Parses XML `<item>` records and aggregates daily average deal price + transaction count.
-- If API settings are missing or request fails, synthetic sample data is used automatically.
-
-## News Source (Naver)
-
-Configure in `config/report.yaml`:
-
-```yaml
-news:
-  provider: "naver"
-  naver_client_id_env: "NAVER_NEWS_CLIENT_ID"
-  naver_client_secret_env: "NAVER_NEWS_CLIENT_SECRET"
-  naver_sort: "date"
-```
-
-Runtime behavior:
-
-- Uses Naver News Search OpenAPI first.
-- If Naver credentials are missing or request fails, falls back to Google News RSS.
-
-Reference note:
-
-- `real-estate-mcp` should be used only as a reference for endpoint/parameter patterns.
-- This project does not call `real-estate-mcp` at runtime.
-
-## LLM Section Generation
-
-This project uses Codex CLI (`codex exec`) for section generation.
-
-Local prerequisite:
-
-```bash
-npm install -g @openai/codex
-```
-
-Set `CODEX_CLI_KEY` to the full `auth.json` payload from a ChatGPT-authenticated Codex CLI session for non-interactive environments (e.g. GitHub Actions).
-
-- Without valid Codex auth, deterministic fallback section text is used.
-- With valid Codex auth, each section prompt is generated independently and injected into fixed report template through Codex CLI.
-
-## GitHub Actions + Pages
-
-Workflow: `.github/workflows/daily-report.yml`
-
-- Runs daily at `22:00 UTC` (`07:00 KST`).
-- Generates report, commits artifacts, builds MkDocs site, deploys to GitHub Pages.
-
-Required repo setup:
-
-1. Add repository secret: `CODEX_CLI_KEY` (auth.json payload from Codex CLI login).
-2. Add repository secret: `MOLIT_API_SERVICE_KEY` (required if `real_estate_api.enabled=true`).
-3. Add repository secret: `NAVER_NEWS_CLIENT_ID` (required for Naver news source).
-4. Add repository secret: `NAVER_NEWS_CLIENT_SECRET` (required for Naver news source).
-5. Enable GitHub Pages with "GitHub Actions" source.
+1. 리포트 설정: `config/report.yaml`
+2. 지역 설정: `config/regions.yaml`
+3. 상태 파일: `state/last_run.json`
+4. LLM 생성기: `src/daily_report/llm/section_writer.py`
