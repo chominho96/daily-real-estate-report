@@ -63,8 +63,8 @@ def load_report_config(path: Path) -> ReportConfig:
         timezone=str(data.get("timezone", "Asia/Seoul")),
         language=str(data.get("language", "ko")),
         llm=LLMConfig(
-            provider=str(llm_cfg.get("provider", "openai")),
-            model=str(llm_cfg.get("model", "gpt-4o-mini")),
+            provider=str(llm_cfg.get("provider", "codex")),
+            model=str(llm_cfg.get("model", "gpt-5-mini")),
             temperature=float(llm_cfg.get("temperature", 0.2)),
         ),
         news=NewsConfig(

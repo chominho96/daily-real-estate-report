@@ -32,6 +32,14 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
         with:
@@ -49,11 +57,14 @@ jobs:
           MOLIT_API_SERVICE_KEY: ${{ secrets.MOLIT_API_SERVICE_KEY }}
           NAVER_NEWS_CLIENT_ID: ${{ secrets.NAVER_NEWS_CLIENT_ID }}
           NAVER_NEWS_CLIENT_SECRET: ${{ secrets.NAVER_NEWS_CLIENT_SECRET }}
+          CODEX_HOME: ${{ runner.temp }}/codex-home
           LLM_DEBUG: ${{ vars.LLM_DEBUG }}
           LLM_STRICT: ${{ vars.LLM_STRICT }}
+          LLM_CODEX_TIMEOUT_SEC: ${{ vars.LLM_CODEX_TIMEOUT_SEC }}
           REAL_ESTATE_API_DEBUG: ${{ vars.REAL_ESTATE_API_DEBUG }}
           REAL_ESTATE_API_STRICT: ${{ vars.REAL_ESTATE_API_STRICT }}
         run: |
+          mkdir -p "$CODEX_HOME"
           REPORT_PATH=$(daily-report --root .)
           echo "report_path=${REPORT_PATH}" >> "$GITHUB_OUTPUT"
 

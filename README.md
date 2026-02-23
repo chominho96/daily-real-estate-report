@@ -114,10 +114,18 @@ Reference note:
 
 ## LLM Section Generation
 
-Set `OPENAI_API_KEY` to enable LLM generation.
+This project uses Codex CLI (`codex exec`) for section generation.
+
+Local prerequisite:
+
+```bash
+npm install -g @openai/codex
+```
+
+Set `OPENAI_API_KEY` to enable Codex CLI authentication in non-interactive environments (e.g. GitHub Actions).
 
 - Without API key, deterministic fallback section text is used.
-- With API key, each section prompt is generated independently and injected into fixed report template.
+- With API key, each section prompt is generated independently and injected into fixed report template through Codex CLI.
 
 ## GitHub Actions + Pages
 
@@ -128,7 +136,7 @@ Workflow: `.github/workflows/daily-report.yml`
 
 Required repo setup:
 
-1. Add repository secret: `OPENAI_API_KEY` (optional).
+1. Add repository secret: `OPENAI_API_KEY` (required for automated LLM generation).
 2. Add repository secret: `MOLIT_API_SERVICE_KEY` (required if `real_estate_api.enabled=true`).
 3. Add repository secret: `NAVER_NEWS_CLIENT_ID` (required for Naver news source).
 4. Add repository secret: `NAVER_NEWS_CLIENT_SECRET` (required for Naver news source).

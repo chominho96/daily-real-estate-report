@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
-import traceback
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from daily_report.models import LLMConfig, SectionConfig
@@ -16,93 +19,85 @@ class SectionWriter:
         self._language = language
         self._debug = os.getenv("LLM_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
         self._strict = os.getenv("LLM_STRICT", "").strip().lower() in {"1", "true", "yes", "on"}
+        self._codex_bin = os.getenv("CODEX_CLI_BIN", "codex").strip() or "codex"
+        self._codex_timeout_sec = int(os.getenv("LLM_CODEX_TIMEOUT_SEC", "180"))
 
     def write(self, section: SectionConfig, context: dict[str, Any]) -> str:
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if api_key:
-            rendered = self._write_with_openai(section=section, context=context, api_key=api_key)
-            if rendered:
-                self._log(f"section={section.id} llm=success")
-                return rendered
-            self._log(f"section={section.id} llm=empty_response_fallback")
+        if not shutil.which(self._codex_bin):
+            self._log(f"section={section.id} llm=missing_codex_cli_fallback")
             if self._strict:
-                raise RuntimeError(f"LLM generation returned empty text for section: {section.id}")
-        else:
-            self._log(f"section={section.id} llm=missing_api_key_fallback")
+                raise RuntimeError(f"Codex CLI not found: {self._codex_bin}")
+            return self._write_fallback(section=section, context=context)
+
+        rendered = self._write_with_codex_cli(section=section, context=context)
+        if rendered:
+            self._log(f"section={section.id} llm=success")
+            return rendered
+        self._log(f"section={section.id} llm=empty_response_fallback")
+        if self._strict:
+            raise RuntimeError(f"LLM generation returned empty text for section: {section.id}")
 
         return self._write_fallback(section=section, context=context)
 
-    def _write_with_openai(self, section: SectionConfig, context: dict[str, Any], api_key: str) -> str:
+    def _write_with_codex_cli(self, section: SectionConfig, context: dict[str, Any]) -> str:
+        prompt = self._build_codex_prompt(section=section, context=context)
+        command: list[str] = [
+            self._codex_bin,
+            "exec",
+            "--sandbox",
+            "read-only",
+            "--ephemeral",
+        ]
+        if self._llm_config.model:
+            command.extend(["--model", self._llm_config.model])
         try:
-            from openai import OpenAI
-        except ImportError:
-            return ""
-
-        prompt = self._build_json_prompt(section=section, context=context)
-
-        try:
-            client = OpenAI(api_key=api_key)
-            response = self._create_response(client=client, prompt=prompt, use_temperature=True)
-            text = self._extract_response_text(response)
-            return self._render_json_response(section=section, context=context, raw_text=text)
-        except Exception as exc:
-            if self._is_unsupported_temperature_error(exc):
-                self._log(f"section={section.id} llm=retry_without_temperature")
-                try:
-                    response = self._create_response(client=client, prompt=prompt, use_temperature=False)
-                    text = self._extract_response_text(response)
-                    return self._render_json_response(section=section, context=context, raw_text=text)
-                except Exception as retry_exc:
-                    self._log(f"section={section.id} llm=error type={type(retry_exc).__name__} detail={retry_exc}")
-                    if self._debug:
-                        self._log(traceback.format_exc().rstrip())
+            with tempfile.TemporaryDirectory(prefix="daily-report-codex-") as tmp_dir:
+                output_path = Path(tmp_dir) / "last_message.txt"
+                command.extend(["--output-last-message", str(output_path)])
+                completed = subprocess.run(
+                    command,
+                    input=prompt,
+                    text=True,
+                    capture_output=True,
+                    timeout=self._codex_timeout_sec,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    self._log(
+                        f"section={section.id} llm=error type=codex_exit detail={completed.returncode} "
+                        f"stderr_tail={self._tail(completed.stderr)}"
+                    )
                     return ""
 
+                raw_text = output_path.read_text(encoding="utf-8").strip() if output_path.exists() else ""
+                if not raw_text:
+                    raw_text = str(completed.stdout or "").strip()
+                if not raw_text:
+                    self._log(f"section={section.id} llm=error type=empty_codex_output")
+                    return ""
+
+                return self._render_json_response(section=section, context=context, raw_text=raw_text)
+        except subprocess.TimeoutExpired:
+            self._log(f"section={section.id} llm=error type=timeout timeout_sec={self._codex_timeout_sec}")
+            return ""
+        except Exception as exc:
             self._log(f"section={section.id} llm=error type={type(exc).__name__} detail={exc}")
-            if self._debug:
-                self._log(traceback.format_exc().rstrip())
             return ""
 
-    def _create_response(self, client: Any, prompt: str, use_temperature: bool) -> Any:
-        params: dict[str, Any] = {
-            "model": self._llm_config.model,
-            "input": prompt,
-        }
-        if use_temperature:
-            params["temperature"] = self._llm_config.temperature
-        return client.responses.create(**params)
+    def _build_codex_prompt(self, section: SectionConfig, context: dict[str, Any]) -> str:
+        return (
+            "다음 지시를 따라 최종 답변만 작성하세요.\n"
+            "1) 쉘 명령/파일 수정/도구 사용 없이 텍스트 생성만 수행하세요.\n"
+            "2) 최종 답변은 JSON 객체 1개만 출력하세요.\n"
+            "3) 코드 블록(```), 설명 문장, 마크다운을 포함하지 마세요.\n\n"
+            + self._build_json_prompt(section=section, context=context)
+        )
 
-    def _extract_response_text(self, response: Any) -> str:
-        text = str(getattr(response, "output_text", "") or "").strip()
-        if text:
-            return text
-        return self._extract_text_from_response(response)
-
-    def _is_unsupported_temperature_error(self, exc: Exception) -> bool:
-        message = str(exc)
-        return "Unsupported parameter: 'temperature'" in message
-
-    def _extract_text_from_response(self, response: Any) -> str:
-        output_items = getattr(response, "output", None)
-        if not output_items:
-            return ""
-
-        chunks: list[str] = []
-        for item in output_items:
-            content_items = getattr(item, "content", None)
-            if content_items is None and isinstance(item, dict):
-                content_items = item.get("content")
-            if not content_items:
-                continue
-
-            for content in content_items:
-                text = getattr(content, "text", None)
-                if text is None and isinstance(content, dict):
-                    text = content.get("text")
-                if text:
-                    chunks.append(str(text))
-
-        return "\n".join(chunks).strip()
+    def _tail(self, text: str, limit: int = 280) -> str:
+        compact = re.sub(r"\s+", " ", str(text or "")).strip()
+        if len(compact) <= limit:
+            return compact
+        return compact[-limit:]
 
     def _build_json_prompt(self, section: SectionConfig, context: dict[str, Any]) -> str:
         base = (
