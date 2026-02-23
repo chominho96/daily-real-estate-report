@@ -13,10 +13,37 @@ if [[ ! -d "${REPORTS_DIR}" ]]; then
   exit 1
 fi
 
+load_sorted_reports() {
+  local keyed=()
+  while IFS= read -r report_file; do
+    local report_name report_stem sort_key hhmm
+    report_name="$(basename "${report_file}")"
+    report_stem="${report_name%.md}"
+    sort_key="000000000000"
+
+    if [[ "${report_stem}" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]{2})-([0-9]{2})$ ]]; then
+      sort_key="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}${BASH_REMATCH[5]}"
+    elif [[ "${report_stem}" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]{4})$ ]]; then
+      hhmm="${BASH_REMATCH[4]}"
+      sort_key="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}${hhmm}"
+    elif [[ "${report_stem}" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})$ ]]; then
+      sort_key="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}0000"
+    fi
+
+    keyed+=("${sort_key}|${report_file}")
+  done < <(find "${REPORTS_DIR}" -maxdepth 1 -type f -name "*.md" ! -name ".gitkeep" -print)
+
+  if (( ${#keyed[@]} == 0 )); then
+    return 1
+  fi
+
+  printf '%s\n' "${keyed[@]}" | sort -r | sed 's/^[^|]*|//'
+}
+
 REPORT_FILES=()
 while IFS= read -r report_file; do
   REPORT_FILES+=("${report_file}")
-done < <(find "${REPORTS_DIR}" -maxdepth 1 -type f -name "*.md" ! -name ".gitkeep" -print | sort -r)
+done < <(load_sorted_reports || true)
 
 if (( ${#REPORT_FILES[@]} == 0 )); then
   echo "no report files found under ${REPORTS_DIR}" >&2
@@ -30,7 +57,7 @@ echo "removed latest report: $(basename "${DELETED_REPORT}")"
 REPORT_FILES=()
 while IFS= read -r report_file; do
   REPORT_FILES+=("${report_file}")
-done < <(find "${REPORTS_DIR}" -maxdepth 1 -type f -name "*.md" ! -name ".gitkeep" -print | sort -r)
+done < <(load_sorted_reports || true)
 
 if (( ${#REPORT_FILES[@]} == 0 )); then
   echo "no remaining reports to derive last_run_at; state file was not updated" >&2
