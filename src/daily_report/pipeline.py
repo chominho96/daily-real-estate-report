@@ -154,6 +154,32 @@ class DailyReportPipeline:
             base["metric_count"] = len(market_metrics)
             return base
 
+        if section.id == "today_signal":
+            metric_count = len(market_metrics)
+            daily_changes = [float(metric.daily_change_pct) for metric in market_metrics]
+            weekly_changes = [float(metric.weekly_change_pct) for metric in market_metrics]
+            txn_changes = [float(metric.txn_daily_change_pct) for metric in market_metrics]
+
+            def _avg(values: list[float]) -> float:
+                if not values:
+                    return 0.0
+                return round(sum(values) / len(values), 4)
+
+            base.update(
+                {
+                    "news_count": len(news_items),
+                    "metric_count": metric_count,
+                    "avg_daily_change_pct": _avg(daily_changes),
+                    "avg_weekly_change_pct": _avg(weekly_changes),
+                    "avg_txn_daily_change_pct": _avg(txn_changes),
+                    "positive_daily_count": sum(1 for value in daily_changes if value > 0),
+                    "negative_daily_count": sum(1 for value in daily_changes if value < 0),
+                    "top_movers": [asdict(metric) for metric in top_movers[:5]],
+                    "metrics": [asdict(metric) for metric in market_metrics],
+                }
+            )
+            return base
+
         base["metrics"] = [asdict(metric) for metric in market_metrics]
         base["news_items"] = [
             {
