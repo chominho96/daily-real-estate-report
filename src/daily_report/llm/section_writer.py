@@ -280,9 +280,11 @@ class SectionWriter:
         if not basis:
             basis = ["가격·거래량·정책 신호가 혼재되어 보수적 접근이 필요합니다."]
 
+        verdict_view = self._format_signal_with_emoji(verdict)
+        confidence_view = self._format_confidence_with_emoji(confidence)
         lines: list[str] = [
-            f"- 오늘의 한마디: {verdict}",
-            f"- 신뢰도: {confidence}",
+            f"- 오늘의 한마디: {verdict_view}",
+            f"- 신뢰도: {confidence_view}",
             "- 기준: 관심 지역/아파트, 단기(1~2주) 관점",
             "- 근거",
         ]
@@ -328,6 +330,24 @@ class SectionWriter:
             "LOW": "하",
         }
         return aliases.get(raw, "")
+
+    def _format_signal_with_emoji(self, verdict: str) -> str:
+        emoji = {
+            "적극매수": "🚀",
+            "매수": "📈",
+            "관망": "👀",
+            "매도": "📉",
+            "적극매도": "🧯",
+        }.get(verdict, "📝")
+        return f"{emoji} {verdict}"
+
+    def _format_confidence_with_emoji(self, confidence: str) -> str:
+        emoji = {
+            "상": "🟢",
+            "중": "🟡",
+            "하": "🔴",
+        }.get(confidence, "⚪")
+        return f"{emoji} {confidence}"
 
     def _section_actor(self, value: Any) -> dict[str, list[str]]:
         if not isinstance(value, dict):
@@ -464,6 +484,8 @@ class SectionWriter:
         score = self._compute_signal_score(context)
         verdict = self._score_to_signal(score)
         confidence = self._score_to_confidence(context, score)
+        verdict_view = self._format_signal_with_emoji(verdict)
+        confidence_view = self._format_confidence_with_emoji(confidence)
 
         avg_daily = self._safe_float(context.get("avg_daily_change_pct"))
         avg_weekly = self._safe_float(context.get("avg_weekly_change_pct"))
@@ -503,8 +525,8 @@ class SectionWriter:
                     )
 
         lines = [
-            f"- 오늘의 한마디: {verdict}",
-            f"- 신뢰도: {confidence}",
+            f"- 오늘의 한마디: {verdict_view}",
+            f"- 신뢰도: {confidence_view}",
             "- 기준: 관심 지역/아파트, 단기(1~2주) 관점",
             "- 근거",
         ]
