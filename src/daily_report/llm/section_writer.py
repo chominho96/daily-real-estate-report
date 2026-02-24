@@ -274,6 +274,19 @@ class SectionWriter:
                 + "규칙: checkpoints/next_actions는 각 2~4개 문자열."
             )
 
+        if section.id == "opportunity_watch":
+            return (
+                base
+                + "반드시 아래 JSON 스키마를 따르세요.\n"
+                + '{\n'
+                + '  "alert_level": "즉시 점검|매물 검토|관찰 강화|대기 중 하나",\n'
+                + '  "summary": "2~3문장",\n'
+                + '  "trigger_checks": ["트리거 점검 문장", "..."],\n'
+                + '  "actions_this_week": ["행동 문장", "..."]\n'
+                + '}\n'
+                + "규칙: trigger_checks/actions_this_week는 각 2~4개 문자열."
+            )
+
         if section.id == "today_signal":
             return (
                 base
@@ -311,6 +324,8 @@ class SectionWriter:
             return self._render_insights(payload)
         if section.id == "buy_readiness":
             return self._render_buy_readiness(payload, context)
+        if section.id == "opportunity_watch":
+            return self._render_opportunity_watch(payload, context)
         if section.id == "today_signal":
             return self._render_today_signal(payload)
 
@@ -477,6 +492,83 @@ class SectionWriter:
         )
         return "\n".join(lines).strip()
 
+    def _render_opportunity_watch(self, payload: dict[str, Any], context: dict[str, Any]) -> str:
+        alert_level = self._normalize_alert_level(payload.get("alert_level", context.get("alert_level", "")))
+        summary = self._clean_sentence(payload.get("summary", ""))
+        trigger_checks = self._string_list(payload.get("trigger_checks"), min_items=2, max_items=4)
+        actions_this_week = self._string_list(payload.get("actions_this_week"), min_items=2, max_items=4)
+
+        if not alert_level:
+            alert_level = self._normalize_alert_level(context.get("alert_level", "")) or "관찰 강화"
+        if not summary:
+            summary = (
+                "시장 조정 신호와 자금 준비 상태를 함께 점검해 이번 주 매수 실행 강도를 산정했습니다. "
+                "가격만 보지 말고 거래 반응과 상환 가능성까지 같이 확인하는 것이 핵심입니다."
+            )
+        if not trigger_checks:
+            trigger_checks = self._default_opportunity_triggers(context)
+        if not actions_this_week:
+            actions_this_week = self._default_opportunity_actions(context)
+
+        alert_view = self._format_alert_with_emoji(alert_level)
+        lines: list[str] = [
+            f"- 알림 단계: {alert_view}",
+            f"- 요약: {summary}",
+            "- 핵심 수치",
+            f"    - 시장 중앙 신호(전일/전주): {self._fmt_pct(context.get('median_daily_change_pct'))} / "
+            f"{self._fmt_pct(context.get('median_weekly_change_pct'))}",
+            f"    - 거래량 중앙 신호(전일): {self._fmt_pct(context.get('median_txn_daily_change_pct'))}",
+            f"    - 준비 상태/현금갭: {context.get('readiness_status', '준비 필요')} / "
+            f"{self._fmt_manwon(context.get('cash_gap_manwon'))}",
+            f"    - 스트레스 부담률/기준: {self._fmt_pct(context.get('monthly_burden_stress_pct'))} / "
+            f"{self._fmt_pct(context.get('affordability_threshold_pct'))}",
+            "- 트리거 체크",
+        ]
+        self._append_child_bullets(
+            lines=lines,
+            items=trigger_checks,
+            fallback="핵심 트리거가 충분하지 않아 관찰 모드를 유지합니다.",
+        )
+        lines.append("- 이번 주 액션")
+        self._append_child_bullets(
+            lines=lines,
+            items=actions_this_week,
+            fallback="후보 단지 호가/실거래를 업데이트하고 대출 조건을 재점검합니다.",
+        )
+
+        candidates = context.get("candidates", [])
+        lines.append("- 관찰 후보")
+        if isinstance(candidates, list) and candidates:
+            for candidate in candidates[:3]:
+                if not isinstance(candidate, dict):
+                    continue
+                region = str(candidate.get("region_name", "")).strip()
+                asset = str(candidate.get("asset", "")).strip()
+                asset_label = {
+                    "apartment": "아파트",
+                    "villa": "빌라",
+                    "officetel": "오피스텔",
+                }.get(asset, asset)
+                price_eok = self._safe_float(candidate.get("current_price_eok"))
+                daily = self._safe_float(candidate.get("daily_change_pct"))
+                weekly = self._safe_float(candidate.get("weekly_change_pct"))
+                txn = int(self._safe_float(candidate.get("current_txn_count")))
+                if region and asset_label:
+                    lines.append(
+                        "    - {region} {asset}: {price:.2f}억, 전일 {daily:+.2f}%, 전주 {weekly:+.2f}%, 거래 {txn}건".format(
+                            region=region,
+                            asset=asset_label,
+                            price=price_eok,
+                            daily=daily,
+                            weekly=weekly,
+                            txn=txn,
+                        )
+                    )
+        else:
+            lines.append("    - 단기 관찰 후보 데이터가 부족합니다.")
+
+        return "\n".join(lines).strip()
+
     def _render_generic(self, payload: dict[str, Any]) -> str:
         points = self._string_list(payload.get("summary_points"), min_items=1, max_items=6)
         if not points:
@@ -523,6 +615,20 @@ class SectionWriter:
             "INPROGRESS": "준비 진행",
             "IN_PROGRESS": "준비 진행",
             "NOTREADY": "준비 필요",
+        }
+        return aliases.get(raw, "")
+
+    def _normalize_alert_level(self, value: Any) -> str:
+        raw = re.sub(r"\s+", "", str(value or "")).upper()
+        aliases = {
+            "즉시점검": "즉시 점검",
+            "매물검토": "매물 검토",
+            "관찰강화": "관찰 강화",
+            "대기": "대기",
+            "ACTIONNOW": "즉시 점검",
+            "REVIEWLISTING": "매물 검토",
+            "WATCH": "관찰 강화",
+            "WAIT": "대기",
         }
         return aliases.get(raw, "")
 
@@ -577,6 +683,40 @@ class SectionWriter:
             actions.append(f"현재 저축 속도 기준 목표 자금 도달 예상 {int(months_to_goal)}개월을 기준으로 매수 시점을 계획합니다.")
         return actions
 
+    def _default_opportunity_triggers(self, context: dict[str, Any]) -> list[str]:
+        checks = context.get("trigger_checks", [])
+        rendered: list[str] = []
+        if isinstance(checks, list):
+            for check in checks:
+                if not isinstance(check, dict):
+                    continue
+                label = self._clean_sentence(check.get("label", ""))
+                detail = self._clean_sentence(check.get("detail", ""))
+                is_met = bool(check.get("met"))
+                mark = "충족" if is_met else "미충족"
+                if label and detail:
+                    rendered.append(f"[{mark}] {label}: {detail}")
+                elif label:
+                    rendered.append(f"[{mark}] {label}")
+        if rendered:
+            return rendered[:4]
+        return [
+            "가격 조정 신호와 거래 반응 신호가 동시에 나타나는지 확인합니다.",
+            "현금갭과 월 상환 부담률이 실행 가능한 수준인지 점검합니다.",
+        ]
+
+    def _default_opportunity_actions(self, context: dict[str, Any]) -> list[str]:
+        alert_level = self._normalize_alert_level(context.get("alert_level", ""))
+        actions = [
+            "관심 단지별 최근 30일 실거래(중앙값/최저가)와 현재 호가 차이를 매일 업데이트합니다.",
+            "대출 사전심사 조건을 기준으로 목표 매수가별 월 상환액을 다시 계산합니다.",
+        ]
+        if alert_level in {"즉시 점검", "매물 검토"}:
+            actions.append("중개사무소 2곳 이상에 동일 조건 매물을 문의해 실매물 여부와 협상 가능폭을 확인합니다.")
+        else:
+            actions.append("현금갭 축소 계획(저축 증액/비용 절감)을 주 단위로 점검해 실행 가능 시점을 앞당깁니다.")
+        return actions
+
     def _format_signal_with_emoji(self, verdict: str) -> str:
         emoji = {
             "적극매수": "🚀",
@@ -594,6 +734,15 @@ class SectionWriter:
             "하": "🔴",
         }.get(confidence, "⚪")
         return f"{emoji} {confidence}"
+
+    def _format_alert_with_emoji(self, alert_level: str) -> str:
+        emoji = {
+            "즉시 점검": "⚡",
+            "매물 검토": "🧭",
+            "관찰 강화": "👀",
+            "대기": "⏸️",
+        }.get(alert_level, "📝")
+        return f"{emoji} {alert_level}"
 
     def _section_actor(self, value: Any) -> dict[str, list[str]]:
         if not isinstance(value, dict):
@@ -793,6 +942,20 @@ class SectionWriter:
         }
         return self._render_buy_readiness(payload, context)
 
+    def _write_opportunity_watch_fallback(self, context: dict[str, Any]) -> str:
+        alert_level = self._normalize_alert_level(context.get("alert_level", "")) or "관찰 강화"
+        summary = (
+            "가격 조정 여부와 거래 반응, 그리고 내 자금 준비 상태를 합쳐 이번 주 매수 실행 강도를 판단했습니다. "
+            "트리거가 일부 충족돼도 현금갭과 상환 부담이 크면 실행보다 관찰이 우선입니다."
+        )
+        payload = {
+            "alert_level": alert_level,
+            "summary": summary,
+            "trigger_checks": self._default_opportunity_triggers(context),
+            "actions_this_week": self._default_opportunity_actions(context),
+        }
+        return self._render_opportunity_watch(payload, context)
+
     def _log(self, message: str) -> None:
         if self._debug:
             print(f"[LLM] {message}", file=sys.stderr)
@@ -904,6 +1067,9 @@ class SectionWriter:
 
         if section.id == "buy_readiness":
             return self._write_buy_readiness_fallback(context)
+
+        if section.id == "opportunity_watch":
+            return self._write_opportunity_watch_fallback(context)
 
         if section.id == "today_signal":
             return self._write_today_signal_fallback(context)

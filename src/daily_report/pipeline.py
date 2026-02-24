@@ -241,102 +241,16 @@ class DailyReportPipeline:
             return base
 
         if section.id == "buy_readiness":
-            target_min_eok = float(buyer_profile.target_price_min_eok)
-            target_max_eok = float(buyer_profile.target_price_max_eok)
-            if target_max_eok < target_min_eok:
-                target_min_eok, target_max_eok = target_max_eok, target_min_eok
+            base.update(self._compute_buy_readiness_snapshot(buyer_profile=buyer_profile, market_metrics=market_metrics))
+            return base
 
-            target_mid_eok = round((target_min_eok + target_max_eok) / 2.0, 2)
-            market_prices_eok = [metric.current_avg_price / 10000.0 for metric in market_metrics]
-            market_ref_eok = round(
-                statistics.median(market_prices_eok) if market_prices_eok else target_mid_eok,
-                2,
+        if section.id == "opportunity_watch":
+            readiness_snapshot = self._compute_buy_readiness_snapshot(
+                buyer_profile=buyer_profile,
+                market_metrics=market_metrics,
             )
-
-            expected_ltv_pct = max(0.0, min(100.0, float(buyer_profile.expected_ltv_pct)))
-            acquisition_cost_pct = max(0.0, float(buyer_profile.acquisition_cost_pct))
-            loan_term_years = max(1, int(buyer_profile.loan_term_years))
-            base_rate_pct = max(0.0, float(buyer_profile.base_rate_pct))
-            stress_rate_pct = max(0.0, float(buyer_profile.stress_rate_pct))
-            monthly_income_manwon = max(0.0, float(buyer_profile.monthly_net_income_manwon))
-            monthly_saving_manwon = max(0.0, float(buyer_profile.monthly_saving_manwon))
-            available_cash_manwon = max(0.0, float(buyer_profile.available_cash_manwon))
-            threshold_pct = max(10.0, min(80.0, float(buyer_profile.affordability_threshold_pct)))
-
-            target_mid_manwon = target_mid_eok * 10000.0
-            max_loan_manwon = round(target_mid_manwon * (expected_ltv_pct / 100.0), 1)
-            acquisition_cost_manwon = round(target_mid_manwon * (acquisition_cost_pct / 100.0), 1)
-            required_cash_manwon = round(max(0.0, target_mid_manwon - max_loan_manwon) + acquisition_cost_manwon, 1)
-            cash_gap_manwon = round(required_cash_manwon - available_cash_manwon, 1)
-
-            months_to_goal: int | None
-            if cash_gap_manwon <= 0:
-                months_to_goal = 0
-            elif monthly_saving_manwon > 0:
-                months_to_goal = int(math.ceil(cash_gap_manwon / monthly_saving_manwon))
-            else:
-                months_to_goal = None
-
-            base_payment_manwon = round(
-                self._monthly_payment_manwon(max_loan_manwon, base_rate_pct, loan_term_years),
-                1,
-            )
-            stress_payment_manwon = round(
-                self._monthly_payment_manwon(max_loan_manwon, stress_rate_pct, loan_term_years),
-                1,
-            )
-
-            base_burden_pct = round((base_payment_manwon / monthly_income_manwon) * 100.0, 1) if monthly_income_manwon else 0.0
-            stress_burden_pct = (
-                round((stress_payment_manwon / monthly_income_manwon) * 100.0, 1) if monthly_income_manwon else 0.0
-            )
-
-            readiness_status = "준비 필요"
-            if monthly_income_manwon > 0:
-                if cash_gap_manwon <= 0 and stress_burden_pct <= threshold_pct:
-                    readiness_status = "준비 완료"
-                elif (
-                    (cash_gap_manwon <= 0 and stress_burden_pct <= threshold_pct + 8.0)
-                    or (
-                        cash_gap_manwon > 0
-                        and months_to_goal is not None
-                        and months_to_goal <= 18
-                        and stress_burden_pct <= threshold_pct + 10.0
-                    )
-                ):
-                    readiness_status = "준비 진행"
-
-            target_vs_market_pct = (
-                round(((target_mid_eok - market_ref_eok) / market_ref_eok) * 100.0, 1) if market_ref_eok > 0 else 0.0
-            )
-
-            base.update(
-                {
-                    "readiness_status": readiness_status,
-                    "target_price_min_eok": round(target_min_eok, 2),
-                    "target_price_max_eok": round(target_max_eok, 2),
-                    "target_price_mid_eok": target_mid_eok,
-                    "market_reference_price_eok": market_ref_eok,
-                    "target_vs_market_pct": target_vs_market_pct,
-                    "expected_ltv_pct": round(expected_ltv_pct, 1),
-                    "acquisition_cost_pct": round(acquisition_cost_pct, 1),
-                    "loan_term_years": loan_term_years,
-                    "base_rate_pct": round(base_rate_pct, 2),
-                    "stress_rate_pct": round(stress_rate_pct, 2),
-                    "monthly_net_income_manwon": round(monthly_income_manwon, 1),
-                    "monthly_saving_manwon": round(monthly_saving_manwon, 1),
-                    "available_cash_manwon": round(available_cash_manwon, 1),
-                    "required_cash_manwon": required_cash_manwon,
-                    "cash_gap_manwon": cash_gap_manwon,
-                    "months_to_goal": months_to_goal,
-                    "estimated_loan_manwon": max_loan_manwon,
-                    "monthly_payment_base_manwon": base_payment_manwon,
-                    "monthly_payment_stress_manwon": stress_payment_manwon,
-                    "monthly_burden_base_pct": base_burden_pct,
-                    "monthly_burden_stress_pct": stress_burden_pct,
-                    "affordability_threshold_pct": round(threshold_pct, 1),
-                }
-            )
+            base.update(readiness_snapshot)
+            base.update(self._compute_opportunity_watch_context(market_metrics=market_metrics, readiness_snapshot=readiness_snapshot))
             return base
 
         if section.id == "today_signal":
@@ -376,6 +290,226 @@ class DailyReportPipeline:
             for item in news_items
         ]
         return base
+
+    def _compute_buy_readiness_snapshot(
+        self,
+        buyer_profile: BuyerProfileConfig,
+        market_metrics: list[MarketMetric],
+    ) -> dict[str, Any]:
+        target_min_eok = float(buyer_profile.target_price_min_eok)
+        target_max_eok = float(buyer_profile.target_price_max_eok)
+        if target_max_eok < target_min_eok:
+            target_min_eok, target_max_eok = target_max_eok, target_min_eok
+
+        target_mid_eok = round((target_min_eok + target_max_eok) / 2.0, 2)
+        market_prices_eok = [metric.current_avg_price / 10000.0 for metric in market_metrics]
+        market_ref_eok = round(
+            statistics.median(market_prices_eok) if market_prices_eok else target_mid_eok,
+            2,
+        )
+
+        expected_ltv_pct = max(0.0, min(100.0, float(buyer_profile.expected_ltv_pct)))
+        acquisition_cost_pct = max(0.0, float(buyer_profile.acquisition_cost_pct))
+        loan_term_years = max(1, int(buyer_profile.loan_term_years))
+        base_rate_pct = max(0.0, float(buyer_profile.base_rate_pct))
+        stress_rate_pct = max(0.0, float(buyer_profile.stress_rate_pct))
+        monthly_income_manwon = max(0.0, float(buyer_profile.monthly_net_income_manwon))
+        monthly_saving_manwon = max(0.0, float(buyer_profile.monthly_saving_manwon))
+        available_cash_manwon = max(0.0, float(buyer_profile.available_cash_manwon))
+        threshold_pct = max(10.0, min(80.0, float(buyer_profile.affordability_threshold_pct)))
+
+        target_mid_manwon = target_mid_eok * 10000.0
+        max_loan_manwon = round(target_mid_manwon * (expected_ltv_pct / 100.0), 1)
+        acquisition_cost_manwon = round(target_mid_manwon * (acquisition_cost_pct / 100.0), 1)
+        required_cash_manwon = round(max(0.0, target_mid_manwon - max_loan_manwon) + acquisition_cost_manwon, 1)
+        cash_gap_manwon = round(required_cash_manwon - available_cash_manwon, 1)
+
+        months_to_goal: int | None
+        if cash_gap_manwon <= 0:
+            months_to_goal = 0
+        elif monthly_saving_manwon > 0:
+            months_to_goal = int(math.ceil(cash_gap_manwon / monthly_saving_manwon))
+        else:
+            months_to_goal = None
+
+        base_payment_manwon = round(
+            self._monthly_payment_manwon(max_loan_manwon, base_rate_pct, loan_term_years),
+            1,
+        )
+        stress_payment_manwon = round(
+            self._monthly_payment_manwon(max_loan_manwon, stress_rate_pct, loan_term_years),
+            1,
+        )
+
+        base_burden_pct = round((base_payment_manwon / monthly_income_manwon) * 100.0, 1) if monthly_income_manwon else 0.0
+        stress_burden_pct = round((stress_payment_manwon / monthly_income_manwon) * 100.0, 1) if monthly_income_manwon else 0.0
+
+        readiness_status = "준비 필요"
+        if monthly_income_manwon > 0:
+            if cash_gap_manwon <= 0 and stress_burden_pct <= threshold_pct:
+                readiness_status = "준비 완료"
+            elif (
+                (cash_gap_manwon <= 0 and stress_burden_pct <= threshold_pct + 8.0)
+                or (
+                    cash_gap_manwon > 0
+                    and months_to_goal is not None
+                    and months_to_goal <= 18
+                    and stress_burden_pct <= threshold_pct + 10.0
+                )
+            ):
+                readiness_status = "준비 진행"
+
+        target_vs_market_pct = (
+            round(((target_mid_eok - market_ref_eok) / market_ref_eok) * 100.0, 1) if market_ref_eok > 0 else 0.0
+        )
+
+        return {
+            "readiness_status": readiness_status,
+            "target_price_min_eok": round(target_min_eok, 2),
+            "target_price_max_eok": round(target_max_eok, 2),
+            "target_price_mid_eok": target_mid_eok,
+            "market_reference_price_eok": market_ref_eok,
+            "target_vs_market_pct": target_vs_market_pct,
+            "expected_ltv_pct": round(expected_ltv_pct, 1),
+            "acquisition_cost_pct": round(acquisition_cost_pct, 1),
+            "loan_term_years": loan_term_years,
+            "base_rate_pct": round(base_rate_pct, 2),
+            "stress_rate_pct": round(stress_rate_pct, 2),
+            "monthly_net_income_manwon": round(monthly_income_manwon, 1),
+            "monthly_saving_manwon": round(monthly_saving_manwon, 1),
+            "available_cash_manwon": round(available_cash_manwon, 1),
+            "required_cash_manwon": required_cash_manwon,
+            "cash_gap_manwon": cash_gap_manwon,
+            "months_to_goal": months_to_goal,
+            "estimated_loan_manwon": max_loan_manwon,
+            "monthly_payment_base_manwon": base_payment_manwon,
+            "monthly_payment_stress_manwon": stress_payment_manwon,
+            "monthly_burden_base_pct": base_burden_pct,
+            "monthly_burden_stress_pct": stress_burden_pct,
+            "affordability_threshold_pct": round(threshold_pct, 1),
+        }
+
+    def _compute_opportunity_watch_context(
+        self,
+        market_metrics: list[MarketMetric],
+        readiness_snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        daily_changes = [float(metric.daily_change_pct) for metric in market_metrics]
+        weekly_changes = [float(metric.weekly_change_pct) for metric in market_metrics]
+        txn_changes = [float(metric.txn_daily_change_pct) for metric in market_metrics]
+
+        def _median(values: list[float]) -> float:
+            if not values:
+                return 0.0
+            return round(float(statistics.median(values)), 2)
+
+        metric_count = len(market_metrics)
+        median_daily_change_pct = _median(daily_changes)
+        median_weekly_change_pct = _median(weekly_changes)
+        median_txn_daily_change_pct = _median(txn_changes)
+
+        down_signal_count = sum(1 for value in daily_changes if value <= -1.0)
+        rebound_signal_count = sum(1 for value in daily_changes if value >= 1.0)
+        txn_expand_count = sum(1 for value in txn_changes if value >= 10.0)
+        low_sample_count = sum(1 for metric in market_metrics if int(metric.current_txn_count) <= 2)
+
+        readiness_status = str(readiness_snapshot.get("readiness_status", "준비 필요"))
+        cash_gap_manwon = float(readiness_snapshot.get("cash_gap_manwon", 0.0) or 0.0)
+        stress_burden_pct = float(readiness_snapshot.get("monthly_burden_stress_pct", 0.0) or 0.0)
+        burden_threshold_pct = float(readiness_snapshot.get("affordability_threshold_pct", 35.0) or 35.0)
+        months_to_goal = readiness_snapshot.get("months_to_goal")
+
+        funding_ready = cash_gap_manwon <= 0.0 or (
+            readiness_status == "준비 진행"
+            and isinstance(months_to_goal, int)
+            and months_to_goal <= 18
+        )
+        repayment_stable = stress_burden_pct <= burden_threshold_pct
+
+        score = 0.0
+        if median_daily_change_pct <= -1.0:
+            score += 0.4
+        if median_weekly_change_pct <= -2.0:
+            score += 0.6
+        if median_txn_daily_change_pct >= 10.0:
+            score += 0.4
+        if metric_count > 0 and low_sample_count >= max(1, int(math.ceil(metric_count * 0.5))):
+            score -= 0.4
+
+        if readiness_status == "준비 완료":
+            score += 0.8
+        elif readiness_status == "준비 진행":
+            score += 0.3
+        else:
+            score -= 0.8
+
+        if cash_gap_manwon > 15000.0:
+            score -= 0.5
+        if stress_burden_pct > burden_threshold_pct + 10.0:
+            score -= 0.5
+
+        score = max(-2.0, min(2.0, score))
+
+        alert_level = "대기"
+        if score >= 1.3:
+            alert_level = "즉시 점검"
+        elif score >= 0.4:
+            alert_level = "매물 검토"
+        elif score > -0.6:
+            alert_level = "관찰 강화"
+
+        candidate_metrics = sorted(market_metrics, key=lambda metric: (metric.daily_change_pct, metric.weekly_change_pct))[:3]
+        candidates = [
+            {
+                "region_name": metric.region_name,
+                "asset": metric.asset,
+                "current_price_eok": round(metric.current_avg_price / 10000.0, 2),
+                "daily_change_pct": round(float(metric.daily_change_pct), 2),
+                "weekly_change_pct": round(float(metric.weekly_change_pct), 2),
+                "current_txn_count": int(metric.current_txn_count),
+            }
+            for metric in candidate_metrics
+        ]
+
+        trigger_checks = [
+            {
+                "label": "가격 조정 신호",
+                "met": median_weekly_change_pct <= -2.0,
+                "detail": f"전주 중앙 변화율 {median_weekly_change_pct:+.2f}%",
+            },
+            {
+                "label": "거래 반응 신호",
+                "met": median_txn_daily_change_pct >= 10.0,
+                "detail": f"거래량 전일 중앙 변화율 {median_txn_daily_change_pct:+.2f}%",
+            },
+            {
+                "label": "자금 준비 신호",
+                "met": funding_ready,
+                "detail": f"현금갭 {cash_gap_manwon:,.1f}만원",
+            },
+            {
+                "label": "상환 안정성 신호",
+                "met": repayment_stable,
+                "detail": f"스트레스 부담률 {stress_burden_pct:.1f}% (기준 {burden_threshold_pct:.1f}%)",
+            },
+        ]
+
+        return {
+            "metric_count": metric_count,
+            "median_daily_change_pct": median_daily_change_pct,
+            "median_weekly_change_pct": median_weekly_change_pct,
+            "median_txn_daily_change_pct": median_txn_daily_change_pct,
+            "down_signal_count": down_signal_count,
+            "rebound_signal_count": rebound_signal_count,
+            "txn_expand_count": txn_expand_count,
+            "low_sample_count": low_sample_count,
+            "opportunity_score": round(score, 2),
+            "alert_level": alert_level,
+            "trigger_checks": trigger_checks,
+            "candidates": candidates,
+            "funding_ready": funding_ready,
+            "repayment_stable": repayment_stable,
+        }
 
     def _monthly_payment_manwon(self, principal_manwon: float, annual_rate_pct: float, term_years: int) -> float:
         principal = max(0.0, float(principal_manwon))
