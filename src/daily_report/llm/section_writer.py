@@ -148,6 +148,18 @@ class SectionWriter:
                 + "규칙: 각 배열은 2~5개 문자열."
             )
 
+        if section.id == "today_signal":
+            return (
+                base
+                + "반드시 아래 JSON 스키마를 따르세요.\n"
+                + '{\n'
+                + '  "verdict": "적극매수|매수|관망|매도|적극매도 중 하나",\n'
+                + '  "confidence": "상|중|하 중 하나",\n'
+                + '  "basis": ["근거 문장", "근거 문장", "근거 문장"]\n'
+                + '}\n'
+                + "규칙: basis는 2~3개 문자열. verdict/confidence는 허용값 외 출력 금지."
+            )
+
         return (
             base
             + "반드시 아래 JSON 스키마를 따르세요.\n"
@@ -169,6 +181,8 @@ class SectionWriter:
             return self._render_price_trend(payload)
         if section.id == "insights":
             return self._render_insights(payload)
+        if section.id == "today_signal":
+            return self._render_today_signal(payload)
 
         return self._render_generic(payload)
 
@@ -254,11 +268,66 @@ class SectionWriter:
 
         return "\n".join(lines).strip()
 
+    def _render_today_signal(self, payload: dict[str, Any]) -> str:
+        verdict = self._normalize_signal_label(payload.get("verdict", payload.get("signal", "")))
+        confidence = self._normalize_confidence_label(payload.get("confidence", ""))
+        basis = self._string_list(payload.get("basis"), min_items=1, max_items=4)
+
+        if not verdict:
+            verdict = "관망"
+        if not confidence:
+            confidence = "중"
+        if not basis:
+            basis = ["가격·거래량·정책 신호가 혼재되어 보수적 접근이 필요합니다."]
+
+        lines: list[str] = [
+            f"- 오늘의 한마디: {verdict}",
+            f"- 신뢰도: {confidence}",
+            "- 기준: 관심 지역/아파트, 단기(1~2주) 관점",
+            "- 근거",
+        ]
+        self._append_child_bullets(
+            lines=lines,
+            items=basis,
+            fallback="핵심 지표 신호가 제한적이어서 관망이 적절합니다.",
+        )
+        return "\n".join(lines).strip()
+
     def _render_generic(self, payload: dict[str, Any]) -> str:
         points = self._string_list(payload.get("summary_points"), min_items=1, max_items=6)
         if not points:
             return "- 핵심 요약을 생성하지 못했습니다."
         return "\n".join(f"- {point}" for point in points)
+
+    def _normalize_signal_label(self, value: Any) -> str:
+        raw = re.sub(r"\s+", "", str(value or "")).upper()
+        aliases = {
+            "적극매수": "적극매수",
+            "매수": "매수",
+            "관망": "관망",
+            "매도": "매도",
+            "적극매도": "적극매도",
+            "STRONGBUY": "적극매수",
+            "BUY": "매수",
+            "HOLD": "관망",
+            "WAIT": "관망",
+            "SELL": "매도",
+            "STRONGSELL": "적극매도",
+        }
+        return aliases.get(raw, "")
+
+    def _normalize_confidence_label(self, value: Any) -> str:
+        raw = re.sub(r"\s+", "", str(value or "")).upper()
+        aliases = {
+            "상": "상",
+            "중": "중",
+            "하": "하",
+            "HIGH": "상",
+            "MEDIUM": "중",
+            "MID": "중",
+            "LOW": "하",
+        }
+        return aliases.get(raw, "")
 
     def _section_actor(self, value: Any) -> dict[str, list[str]]:
         if not isinstance(value, dict):
@@ -317,6 +386,130 @@ class SectionWriter:
         if any(phrase in text for phrase in banned_phrases):
             return ""
         return text
+
+    def _safe_float(self, value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _compute_signal_score(self, context: dict[str, Any]) -> float:
+        metric_count = int(context.get("metric_count", 0) or 0)
+        if metric_count <= 0:
+            return 0.0
+
+        avg_daily = self._safe_float(context.get("avg_daily_change_pct"))
+        avg_weekly = self._safe_float(context.get("avg_weekly_change_pct"))
+        avg_txn = self._safe_float(context.get("avg_txn_daily_change_pct"))
+        positive_daily = int(context.get("positive_daily_count", 0) or 0)
+        negative_daily = int(context.get("negative_daily_count", 0) or 0)
+        top_movers = context.get("top_movers", [])
+
+        score = 0.0
+        if avg_daily >= 1.0:
+            score += 1.0
+        elif avg_daily <= -1.0:
+            score -= 1.0
+
+        if avg_weekly >= 1.5:
+            score += 1.0
+        elif avg_weekly <= -1.5:
+            score -= 1.0
+
+        if avg_txn >= 15.0:
+            score += 0.5
+        elif avg_txn <= -15.0:
+            score -= 0.5
+
+        if positive_daily >= negative_daily + 2:
+            score += 0.5
+        elif negative_daily >= positive_daily + 2:
+            score -= 0.5
+
+        if isinstance(top_movers, list) and top_movers:
+            first = top_movers[0]
+            if isinstance(first, dict):
+                lead_change = self._safe_float(first.get("daily_change_pct"))
+                if abs(lead_change) >= 6.0:
+                    score += 0.5 if lead_change > 0 else -0.5
+
+        return max(-2.0, min(2.0, score))
+
+    def _score_to_signal(self, score: float) -> str:
+        if score >= 1.5:
+            return "적극매수"
+        if score >= 0.5:
+            return "매수"
+        if score > -0.5:
+            return "관망"
+        if score > -1.5:
+            return "매도"
+        return "적극매도"
+
+    def _score_to_confidence(self, context: dict[str, Any], score: float) -> str:
+        market_data_mode = str(context.get("market_data_mode", ""))
+        metric_count = int(context.get("metric_count", 0) or 0)
+
+        if market_data_mode in {"public_api_error", "public_api_empty", "synthetic"}:
+            return "하"
+        if metric_count <= 1:
+            return "하"
+        if metric_count >= 8 and abs(score) >= 1.0:
+            return "상"
+        if metric_count >= 3:
+            return "중"
+        return "하"
+
+    def _write_today_signal_fallback(self, context: dict[str, Any]) -> str:
+        score = self._compute_signal_score(context)
+        verdict = self._score_to_signal(score)
+        confidence = self._score_to_confidence(context, score)
+
+        avg_daily = self._safe_float(context.get("avg_daily_change_pct"))
+        avg_weekly = self._safe_float(context.get("avg_weekly_change_pct"))
+        avg_txn = self._safe_float(context.get("avg_txn_daily_change_pct"))
+        metric_count = int(context.get("metric_count", 0) or 0)
+        news_count = int(context.get("news_count", 0) or 0)
+        top_movers = context.get("top_movers", [])
+
+        basis = [
+            "평균 일간 변화율 {daily:+.2f}%, 주간 변화율 {weekly:+.2f}%로 단기 추세를 반영했습니다.".format(
+                daily=avg_daily,
+                weekly=avg_weekly,
+            ),
+            "거래량 전일 대비 평균 변화율은 {txn:+.2f}%이며 표본 수는 {count}개입니다.".format(
+                txn=avg_txn,
+                count=metric_count,
+            ),
+            "정책 뉴스 {count}건을 참고해 이벤트 리스크를 함께 고려했습니다.".format(count=news_count),
+        ]
+
+        if isinstance(top_movers, list) and top_movers:
+            lead = top_movers[0]
+            if isinstance(lead, dict):
+                region = str(lead.get("region_name", "")).strip()
+                asset = str(lead.get("asset", "")).strip()
+                asset_label = {
+                    "apartment": "아파트",
+                    "villa": "빌라",
+                    "officetel": "오피스텔",
+                }.get(asset, asset)
+                change = self._safe_float(lead.get("daily_change_pct"))
+                if region and asset_label:
+                    basis[2] = "{region} {asset}의 전일 변동률 {change:+.2f}%가 대표 신호로 반영되었습니다.".format(
+                        region=region,
+                        asset=asset_label,
+                        change=change,
+                    )
+
+        lines = [
+            f"- 오늘의 한마디: {verdict}",
+            f"- 신뢰도: {confidence}",
+            "- 기준: 관심 지역/아파트, 단기(1~2주) 관점",
+            "- 근거",
+        ]
+        self._append_child_bullets(lines=lines, items=basis, fallback="시장 신호가 제한적입니다.")
+        return "\n".join(lines).strip()
 
     def _log(self, message: str) -> None:
         if self._debug:
@@ -426,5 +619,8 @@ class SectionWriter:
                 ]
             )
             return "\n".join(lines)
+
+        if section.id == "today_signal":
+            return self._write_today_signal_fallback(context)
 
         return "- 기본 생성기로 작성된 섹션입니다."
