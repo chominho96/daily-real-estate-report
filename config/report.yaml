@@ -32,6 +32,19 @@ real_estate_api:
     villa: "/1613000/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade"
     officetel: "/1613000/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade"
 
+buyer_profile:
+  monthly_net_income_manwon: 420.0
+  monthly_saving_manwon: 180.0
+  available_cash_manwon: 8000.0
+  target_price_min_eok: 9.0
+  target_price_max_eok: 12.0
+  expected_ltv_pct: 70.0
+  acquisition_cost_pct: 4.6
+  loan_term_years: 30
+  base_rate_pct: 4.3
+  stress_rate_pct: 6.0
+  affordability_threshold_pct: 35.0
+
 sections:
   - id: "policy_news"
     title: "정책 뉴스"
@@ -42,6 +55,9 @@ sections:
   - id: "insights"
     title: "기타 인사이트"
     instruction: "이상 변동 지역, 거래량 변화, 해석 시 유의사항을 간결하게 정리해줘."
+  - id: "buy_readiness"
+    title: "매수 준비도"
+    instruction: "예산/대출/월상환 관점에서 현재 매수 준비도를 판단하고, 필요한 준비 단계를 제안해줘."
   - id: "today_signal"
     title: "오늘의 한마디"
     instruction: "오늘의 시장 행동 신호를 적극매수/매수/관망/매도/적극매도 중 하나로 제시하고, 신뢰도와 근거를 함께 정리해줘."

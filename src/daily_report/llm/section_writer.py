@@ -21,23 +21,128 @@ class SectionWriter:
         self._strict = os.getenv("LLM_STRICT", "").strip().lower() in {"1", "true", "yes", "on"}
         self._codex_bin = os.getenv("CODEX_CLI_BIN", "codex").strip() or "codex"
         self._codex_timeout_sec = int(os.getenv("LLM_CODEX_TIMEOUT_SEC", "180"))
+        self._section_health: dict[str, dict[str, str]] = {}
+        self._last_outcome_code = "unknown"
+        self._last_outcome_detail = ""
+        self._last_outcome_cause = ""
+
+    def _set_outcome(self, code: str, detail: str = "", cause: str = "") -> None:
+        self._last_outcome_code = code
+        self._last_outcome_detail = detail
+        self._last_outcome_cause = cause
+
+    def _record_section_health(self, section_id: str) -> None:
+        mapping = {
+            "success": {
+                "severity": "info",
+                "message": "LLM 생성 성공",
+                "possible_cause": "",
+            },
+            "missing_codex_cli_fallback": {
+                "severity": "critical",
+                "message": "Codex CLI 미탑재로 fallback 텍스트를 사용했습니다.",
+                "possible_cause": "러너 환경에 codex 바이너리가 없거나 PATH 설정이 누락됐을 수 있습니다.",
+            },
+            "json_parse_fallback": {
+                "severity": "warning",
+                "message": "LLM 응답 JSON 파싱 실패로 fallback 텍스트를 사용했습니다.",
+                "possible_cause": "모델 출력이 스키마를 벗어나거나 응답이 중간에 잘렸을 수 있습니다.",
+            },
+            "codex_exit": {
+                "severity": "warning",
+                "message": "Codex CLI 실행 오류로 fallback 텍스트를 사용했습니다.",
+                "possible_cause": "인증(auth.json), 네트워크, 모델명/CLI 옵션 문제일 수 있습니다.",
+            },
+            "empty_codex_output": {
+                "severity": "warning",
+                "message": "Codex 응답이 비어 fallback 텍스트를 사용했습니다.",
+                "possible_cause": "일시적 네트워크 이슈 또는 CLI 내부 오류일 수 있습니다.",
+            },
+            "timeout": {
+                "severity": "warning",
+                "message": "Codex 응답 타임아웃으로 fallback 텍스트를 사용했습니다.",
+                "possible_cause": "일시적 지연 또는 모델 응답 지연일 수 있습니다.",
+            },
+            "exception": {
+                "severity": "warning",
+                "message": "LLM 처리 중 예외가 발생해 fallback 텍스트를 사용했습니다.",
+                "possible_cause": "환경 변수/실행 환경 불일치 또는 예상치 못한 런타임 오류일 수 있습니다.",
+            },
+            "empty_response_fallback": {
+                "severity": "warning",
+                "message": "LLM 결과가 비어 fallback 텍스트를 사용했습니다.",
+                "possible_cause": "응답 파싱 실패 또는 CLI 출력 누락 가능성이 있습니다.",
+            },
+        }
+        default_payload = mapping["exception"]
+        payload = mapping.get(self._last_outcome_code, default_payload).copy()
+        if self._last_outcome_detail:
+            payload["message"] = f"{payload['message']} ({self._last_outcome_detail})"
+        if self._last_outcome_cause:
+            payload["possible_cause"] = self._last_outcome_cause
+        payload["code"] = self._last_outcome_code
+        self._section_health[section_id] = payload
+
+    def health_snapshot(self) -> dict[str, Any]:
+        issues: list[dict[str, str]] = []
+        for section_id, info in self._section_health.items():
+            severity = info.get("severity", "info")
+            if severity not in {"warning", "critical"}:
+                continue
+            issues.append(
+                {
+                    "source": "llm",
+                    "section_id": section_id,
+                    "severity": severity,
+                    "code": info.get("code", ""),
+                    "message": info.get("message", ""),
+                    "possible_cause": info.get("possible_cause", ""),
+                }
+            )
+
+        status = "ok"
+        if any(issue.get("severity") == "critical" for issue in issues):
+            status = "critical"
+        elif issues:
+            status = "warning"
+
+        return {
+            "status": status,
+            "issues": issues,
+            "sections": self._section_health,
+        }
 
     def write(self, section: SectionConfig, context: dict[str, Any]) -> str:
+        self._set_outcome("unknown")
         if not shutil.which(self._codex_bin):
             self._log(f"section={section.id} llm=missing_codex_cli_fallback")
+            self._set_outcome("missing_codex_cli_fallback")
             if self._strict:
+                self._record_section_health(section.id)
                 raise RuntimeError(f"Codex CLI not found: {self._codex_bin}")
-            return self._write_fallback(section=section, context=context)
+            rendered = self._write_fallback(section=section, context=context)
+            self._record_section_health(section.id)
+            return rendered
 
         rendered = self._write_with_codex_cli(section=section, context=context)
         if rendered:
-            self._log(f"section={section.id} llm=success")
+            if self._last_outcome_code == "unknown":
+                self._set_outcome("success")
+            if self._last_outcome_code == "success":
+                self._log(f"section={section.id} llm=success")
+            else:
+                self._log(f"section={section.id} llm={self._last_outcome_code}")
+            self._record_section_health(section.id)
             return rendered
         self._log(f"section={section.id} llm=empty_response_fallback")
+        self._set_outcome("empty_response_fallback")
         if self._strict:
+            self._record_section_health(section.id)
             raise RuntimeError(f"LLM generation returned empty text for section: {section.id}")
 
-        return self._write_fallback(section=section, context=context)
+        fallback = self._write_fallback(section=section, context=context)
+        self._record_section_health(section.id)
+        return fallback
 
     def _write_with_codex_cli(self, section: SectionConfig, context: dict[str, Any]) -> str:
         prompt = self._build_codex_prompt(section=section, context=context)
@@ -69,6 +174,11 @@ class SectionWriter:
                         f"section={section.id} llm=error type=codex_exit detail={completed.returncode} "
                         f"stderr_tail={self._tail(completed.stderr)}"
                     )
+                    self._set_outcome(
+                        "codex_exit",
+                        detail=f"exit={completed.returncode}",
+                        cause=self._tail(completed.stderr),
+                    )
                     return ""
 
                 raw_text = output_path.read_text(encoding="utf-8").strip() if output_path.exists() else ""
@@ -76,14 +186,17 @@ class SectionWriter:
                     raw_text = str(completed.stdout or "").strip()
                 if not raw_text:
                     self._log(f"section={section.id} llm=error type=empty_codex_output")
+                    self._set_outcome("empty_codex_output")
                     return ""
 
                 return self._render_json_response(section=section, context=context, raw_text=raw_text)
         except subprocess.TimeoutExpired:
             self._log(f"section={section.id} llm=error type=timeout timeout_sec={self._codex_timeout_sec}")
+            self._set_outcome("timeout", detail=f"timeout={self._codex_timeout_sec}s")
             return ""
         except Exception as exc:
             self._log(f"section={section.id} llm=error type={type(exc).__name__} detail={exc}")
+            self._set_outcome("exception", detail=type(exc).__name__)
             return ""
 
     def _build_codex_prompt(self, section: SectionConfig, context: dict[str, Any]) -> str:
@@ -148,6 +261,19 @@ class SectionWriter:
                 + "규칙: 각 배열은 2~5개 문자열."
             )
 
+        if section.id == "buy_readiness":
+            return (
+                base
+                + "반드시 아래 JSON 스키마를 따르세요.\n"
+                + '{\n'
+                + '  "status": "준비 완료|준비 진행|준비 필요 중 하나",\n'
+                + '  "summary": "2~3문장",\n'
+                + '  "checkpoints": ["점검 문장", "..."],\n'
+                + '  "next_actions": ["행동 문장", "..."]\n'
+                + '}\n'
+                + "규칙: checkpoints/next_actions는 각 2~4개 문자열."
+            )
+
         if section.id == "today_signal":
             return (
                 base
@@ -172,8 +298,10 @@ class SectionWriter:
         payload = self._parse_json_object(raw_text)
         if payload is None:
             self._log(f"section={section.id} llm=json_parse_fallback")
+            self._set_outcome("json_parse_fallback")
             return self._write_fallback(section=section, context=context)
         self._log(f"section={section.id} llm=json_parse_ok")
+        self._set_outcome("success")
 
         if section.id == "policy_news":
             return self._render_policy_news(payload)
@@ -181,6 +309,8 @@ class SectionWriter:
             return self._render_price_trend(payload)
         if section.id == "insights":
             return self._render_insights(payload)
+        if section.id == "buy_readiness":
+            return self._render_buy_readiness(payload, context)
         if section.id == "today_signal":
             return self._render_today_signal(payload)
 
@@ -295,6 +425,58 @@ class SectionWriter:
         )
         return "\n".join(lines).strip()
 
+    def _render_buy_readiness(self, payload: dict[str, Any], context: dict[str, Any]) -> str:
+        status = self._normalize_readiness_status(payload.get("status", context.get("readiness_status", "")))
+        summary = self._clean_sentence(payload.get("summary", ""))
+        checkpoints = self._string_list(payload.get("checkpoints"), min_items=2, max_items=4)
+        next_actions = self._string_list(payload.get("next_actions"), min_items=2, max_items=4)
+
+        if not status:
+            status = self._normalize_readiness_status(context.get("readiness_status", "")) or "준비 필요"
+        if not summary:
+            summary = (
+                "현재 입력한 예산/대출 조건에서 매수 준비도를 점검했습니다. "
+                "필요 현금과 월 상환 부담을 함께 보고 실행 순서를 정하는 것이 핵심입니다."
+            )
+        if not checkpoints:
+            checkpoints = self._default_buy_readiness_checkpoints(context)
+        if not next_actions:
+            next_actions = self._default_buy_readiness_actions(context)
+
+        lines: list[str] = [
+            f"- 준비 상태: {status}",
+            f"- 요약: {summary}",
+            "- 핵심 수치",
+            f"    - 목표 매수가(중앙): {self._fmt_eok(context.get('target_price_mid_eok'))} "
+            f"(범위 {self._fmt_eok(context.get('target_price_min_eok'))}~{self._fmt_eok(context.get('target_price_max_eok'))})",
+            f"    - 추정 필요현금: {self._fmt_manwon(context.get('required_cash_manwon'))}",
+            f"    - 보유현금/현금갭: {self._fmt_manwon(context.get('available_cash_manwon'))} / "
+            f"{self._fmt_manwon(context.get('cash_gap_manwon'))}",
+            f"    - 예상 월상환액(기준/스트레스): {self._fmt_manwon(context.get('monthly_payment_base_manwon'))} / "
+            f"{self._fmt_manwon(context.get('monthly_payment_stress_manwon'))}",
+            f"    - 월상환 부담률(기준/스트레스): {self._fmt_pct(context.get('monthly_burden_base_pct'))} / "
+            f"{self._fmt_pct(context.get('monthly_burden_stress_pct'))}",
+        ]
+        months_to_goal = context.get("months_to_goal")
+        if months_to_goal is None:
+            lines.append("    - 목표 자금까지 예상 기간: 저축액 입력이 없어 계산 불가")
+        else:
+            lines.append(f"    - 목표 자금까지 예상 기간: {int(months_to_goal)}개월")
+
+        lines.extend(["- 점검 포인트"])
+        self._append_child_bullets(
+            lines=lines,
+            items=checkpoints,
+            fallback="필요 현금과 월 상환 부담을 함께 점검합니다.",
+        )
+        lines.extend(["- 다음 행동"])
+        self._append_child_bullets(
+            lines=lines,
+            items=next_actions,
+            fallback="예산 범위와 대출 가능 금액을 먼저 확정합니다.",
+        )
+        return "\n".join(lines).strip()
+
     def _render_generic(self, payload: dict[str, Any]) -> str:
         points = self._string_list(payload.get("summary_points"), min_items=1, max_items=6)
         if not points:
@@ -330,6 +512,70 @@ class SectionWriter:
             "LOW": "하",
         }
         return aliases.get(raw, "")
+
+    def _normalize_readiness_status(self, value: Any) -> str:
+        raw = re.sub(r"\s+", "", str(value or "")).upper()
+        aliases = {
+            "준비완료": "준비 완료",
+            "준비진행": "준비 진행",
+            "준비필요": "준비 필요",
+            "READY": "준비 완료",
+            "INPROGRESS": "준비 진행",
+            "IN_PROGRESS": "준비 진행",
+            "NOTREADY": "준비 필요",
+        }
+        return aliases.get(raw, "")
+
+    def _fmt_manwon(self, value: Any) -> str:
+        amount = self._safe_float(value, default=0.0)
+        sign = "-" if amount < 0 else ""
+        absolute = abs(amount)
+        eok = absolute / 10000.0
+        return f"{sign}{absolute:,.1f}만원 ({sign}{eok:.2f}억)"
+
+    def _fmt_eok(self, value: Any) -> str:
+        return f"{self._safe_float(value, default=0.0):.2f}억"
+
+    def _fmt_pct(self, value: Any) -> str:
+        return f"{self._safe_float(value, default=0.0):.1f}%"
+
+    def _default_buy_readiness_checkpoints(self, context: dict[str, Any]) -> list[str]:
+        gap = self._safe_float(context.get("cash_gap_manwon"))
+        stress = self._safe_float(context.get("monthly_burden_stress_pct"))
+        threshold = self._safe_float(context.get("affordability_threshold_pct"), default=35.0)
+        points: list[str] = []
+        if gap > 0:
+            points.append(f"현재 추정 기준 필요현금 대비 {self._fmt_manwon(gap)} 부족합니다.")
+        else:
+            points.append("필요현금은 충족 상태이며 실행 시점과 금리 조건 점검이 우선입니다.")
+
+        if stress > threshold:
+            points.append(
+                f"스트레스 금리 부담률 {stress:.1f}%가 목표 상한 {threshold:.1f}%를 상회해 상환 리스크가 큽니다."
+            )
+        else:
+            points.append(
+                f"스트레스 금리 부담률 {stress:.1f}%가 목표 상한 {threshold:.1f}% 이내로 관리 가능한 수준입니다."
+            )
+
+        market_gap = self._safe_float(context.get("target_vs_market_pct"))
+        if market_gap >= 0:
+            points.append(f"목표 매수가 중앙값이 현재 시장 기준 대비 {market_gap:.1f}% 높아 협상/하락 구간 포착이 필요합니다.")
+        else:
+            points.append(f"목표 매수가 중앙값이 현재 시장 기준 대비 {abs(market_gap):.1f}% 낮아 후보 단지 선별이 필요합니다.")
+        return points
+
+    def _default_buy_readiness_actions(self, context: dict[str, Any]) -> list[str]:
+        months_to_goal = context.get("months_to_goal")
+        actions = [
+            "매수 후보 단지 3~5개를 고정하고 최근 90일 실거래 중앙값과 최저 체결가를 매주 업데이트합니다.",
+            "대출 사전상담으로 실제 가능 LTV/DSR 범위를 확인하고, 같은 조건으로 월 상환액을 재산출합니다.",
+        ]
+        if months_to_goal is None:
+            actions.append("월 저축 가능액을 확정해 목표 자금 달성 시점을 산출합니다.")
+        else:
+            actions.append(f"현재 저축 속도 기준 목표 자금 도달 예상 {int(months_to_goal)}개월을 기준으로 매수 시점을 계획합니다.")
+        return actions
 
     def _format_signal_with_emoji(self, verdict: str) -> str:
         emoji = {
@@ -533,6 +779,20 @@ class SectionWriter:
         self._append_child_bullets(lines=lines, items=basis, fallback="시장 신호가 제한적입니다.")
         return "\n".join(lines).strip()
 
+    def _write_buy_readiness_fallback(self, context: dict[str, Any]) -> str:
+        status = self._normalize_readiness_status(context.get("readiness_status", "")) or "준비 필요"
+        summary = (
+            "매수 준비도는 필요현금, 월 상환 부담, 목표 도달 기간을 함께 봐야 정확합니다. "
+            "지금 수치는 입력한 조건 기준 시뮬레이션 결과입니다."
+        )
+        payload = {
+            "status": status,
+            "summary": summary,
+            "checkpoints": self._default_buy_readiness_checkpoints(context),
+            "next_actions": self._default_buy_readiness_actions(context),
+        }
+        return self._render_buy_readiness(payload, context)
+
     def _log(self, message: str) -> None:
         if self._debug:
             print(f"[LLM] {message}", file=sys.stderr)
@@ -641,6 +901,9 @@ class SectionWriter:
                 ]
             )
             return "\n".join(lines)
+
+        if section.id == "buy_readiness":
+            return self._write_buy_readiness_fallback(context)
 
         if section.id == "today_signal":
             return self._write_today_signal_fallback(context)

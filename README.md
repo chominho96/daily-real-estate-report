@@ -5,7 +5,7 @@
 ## 개요
 
 - 리포트 구조는 고정 템플릿이며 섹션 본문만 생성합니다.
-- 정책 뉴스, 가격 추이, 기타 인사이트 3개 섹션을 매일 생성합니다.
+- 정책 뉴스, 가격 추이, 기타 인사이트, 매수 준비도, 오늘의 한마디 섹션을 매일 생성합니다.
 - 실거래 데이터는 공공 API를 직접 호출합니다.
 - LLM 생성은 OpenAI SDK 직접 호출이 아니라 Codex CLI(`codex exec`)를 사용합니다.
 - 결과 문서는 MkDocs로 빌드되어 GitHub Pages에 배포됩니다.
@@ -20,7 +20,7 @@
 4. `daily-report --root .` 실행으로 리포트를 생성합니다.
 5. 변경된 리포트/인덱스/상태 파일을 커밋 & 푸시합니다.
 6. MkDocs 빌드 후 Pages 아티팩트를 업로드합니다.
-7. 기본 브랜치에서 실행된 경우 GitHub Pages 배포와 Discord 알림을 수행합니다.
+7. 기본 브랜치에서 실행된 경우 GitHub Pages 배포와 Discord 알림을 수행합니다. (API/LLM 경고·치명 이슈가 있으면 참고 메시지와 가능 원인을 함께 전송)
 
 ## 워크플로우 사용 방법
 
@@ -93,9 +93,24 @@ pip install .[dev]
 daily-report --root .
 ```
 
+## 매수 준비도 설정
+
+`config/report.yaml`의 `buyer_profile` 값을 수정하면 `매수 준비도` 섹션 계산에 반영됩니다.
+
+1. `monthly_net_income_manwon`: 세후 월소득(만원)
+2. `monthly_saving_manwon`: 월 저축 가능액(만원)
+3. `available_cash_manwon`: 현재 보유 현금(만원)
+4. `target_price_min_eok`/`target_price_max_eok`: 목표 매수가 범위(억 원)
+5. `expected_ltv_pct`: 적용 가정 LTV(%)
+6. `acquisition_cost_pct`: 취득세/중개보수 등 부대비용 가정(%)
+7. `loan_term_years`: 대출 만기(년)
+8. `base_rate_pct`/`stress_rate_pct`: 기준/스트레스 금리(%)
+9. `affordability_threshold_pct`: 월상환 부담률 목표 상한(%)
+
 ## 참고 파일
 
 1. 리포트 설정: `config/report.yaml`
 2. 지역 설정: `config/regions.yaml`
-3. 상태 파일: `state/last_run.json`
-4. LLM 생성기: `src/daily_report/llm/section_writer.py`
+3. 매수 준비도 입력값: `config/report.yaml`의 `buyer_profile`
+4. 상태 파일: `state/last_run.json`
+5. LLM 생성기: `src/daily_report/llm/section_writer.py`

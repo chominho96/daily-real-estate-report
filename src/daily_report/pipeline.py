@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from datetime import datetime, time, timedelta
+import math
 from pathlib import Path
+import statistics
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -11,7 +13,7 @@ from daily_report.analysis.metrics import build_market_metrics, extract_top_move
 from daily_report.collectors.news import fetch_policy_news
 from daily_report.collectors.real_estate import fetch_market_points
 from daily_report.llm.section_writer import SectionWriter
-from daily_report.models import MarketMetric, MarketPoint, NewsItem, ReportWindow, SectionConfig
+from daily_report.models import BuyerProfileConfig, MarketMetric, MarketPoint, NewsItem, ReportWindow, SectionConfig
 from daily_report.render.markdown import render_docs_index, render_fixed_report
 from daily_report.settings import load_regions, load_report_config
 
@@ -66,6 +68,8 @@ class DailyReportPipeline:
         )
         market_metrics = build_market_metrics(market_points)
         top_movers = extract_top_movers(market_metrics)
+        health_issues: list[dict[str, str]] = []
+        health_issues.extend(self._market_data_health_issues(market_data_mode=market_data_mode, market_metrics=market_metrics))
 
         writer = SectionWriter(report_cfg.llm, report_cfg.language)
         section_bodies: dict[str, str] = {}
@@ -78,6 +82,7 @@ class DailyReportPipeline:
                 market_metrics=market_metrics,
                 top_movers=top_movers,
                 market_data_mode=market_data_mode,
+                buyer_profile=report_cfg.buyer_profile,
             )
             generated_body = writer.write(section, section_context)
             section_bodies[section.id] = self._compose_section_body(
@@ -86,6 +91,16 @@ class DailyReportPipeline:
                 news_items=news_items,
                 market_metrics=market_metrics,
             )
+
+        llm_health = writer.health_snapshot()
+        health_issues.extend(llm_health.get("issues", []))
+        health_status = self._health_status(health_issues)
+        health_payload = {
+            "status": health_status,
+            "issues": health_issues,
+            "market_data_mode": market_data_mode,
+            "llm": llm_health,
+        }
 
         report_text = render_fixed_report(
             generated_at=now,
@@ -107,10 +122,78 @@ class DailyReportPipeline:
             section_bodies=section_bodies,
             report_path=report_path,
             market_data_mode=market_data_mode,
+            health=health_payload,
         )
         self._write_last_run(now)
 
         return report_path
+
+    def _market_data_health_issues(self, market_data_mode: str, market_metrics: list[MarketMetric]) -> list[dict[str, str]]:
+        issues: list[dict[str, str]] = []
+        if market_data_mode == "public_api_error":
+            issues.append(
+                {
+                    "source": "api",
+                    "section_id": "price_trend",
+                    "severity": "critical",
+                    "code": "public_api_error",
+                    "message": "실거래 공공 API 호출 오류로 시장 지표 신뢰도가 크게 낮습니다.",
+                    "possible_cause": "일시적 네트워크 장애, API 키 이슈, 또는 공공 API 응답 오류일 수 있습니다.",
+                }
+            )
+        elif market_data_mode == "synthetic":
+            issues.append(
+                {
+                    "source": "api",
+                    "section_id": "price_trend",
+                    "severity": "critical",
+                    "code": "synthetic_data_used",
+                    "message": "실거래 데이터 대신 샘플 데이터가 사용되었습니다.",
+                    "possible_cause": "실거래 API 설정 비활성화 또는 키 누락 가능성이 있습니다.",
+                }
+            )
+        elif market_data_mode == "public_api_empty":
+            issues.append(
+                {
+                    "source": "api",
+                    "section_id": "price_trend",
+                    "severity": "warning",
+                    "code": "public_api_empty",
+                    "message": "실거래 API 응답은 있었지만 집계 가능한 데이터가 없습니다.",
+                    "possible_cause": "최근 신고 지연/표본 부족 구간일 수 있으며 다음 실행에서 복구될 수 있습니다.",
+                }
+            )
+        elif market_data_mode == "public_api_extended":
+            issues.append(
+                {
+                    "source": "api",
+                    "section_id": "price_trend",
+                    "severity": "warning",
+                    "code": "public_api_extended_window",
+                    "message": "기본 기간 데이터 부족으로 90일 확장 조회 결과를 사용했습니다.",
+                    "possible_cause": "최근 데이터 신고 지연 또는 API 반영 지연일 수 있습니다.",
+                }
+            )
+
+        if not market_metrics:
+            issues.append(
+                {
+                    "source": "api",
+                    "section_id": "price_trend",
+                    "severity": "warning",
+                    "code": "empty_market_metrics",
+                    "message": "가격/거래량 지표가 비어 있어 해석 섹션 신뢰도가 낮습니다.",
+                    "possible_cause": "관심 지역 표본 부족 또는 API 집계 실패 가능성이 있습니다.",
+                }
+            )
+        return issues
+
+    def _health_status(self, issues: list[dict[str, str]]) -> str:
+        if any(issue.get("severity") == "critical" for issue in issues):
+            return "critical"
+        if any(issue.get("severity") == "warning" for issue in issues):
+            return "warning"
+        return "ok"
 
     def _build_section_context(
         self,
@@ -120,6 +203,7 @@ class DailyReportPipeline:
         market_metrics: list[MarketMetric],
         top_movers: list[MarketMetric],
         market_data_mode: str,
+        buyer_profile: BuyerProfileConfig,
     ) -> dict[str, Any]:
         base = {
             "window_start": _fmt_dt(report_window.start),
@@ -152,6 +236,105 @@ class DailyReportPipeline:
         if section.id == "insights":
             base["top_movers"] = [asdict(metric) for metric in top_movers]
             base["metric_count"] = len(market_metrics)
+            return base
+
+        if section.id == "buy_readiness":
+            target_min_eok = float(buyer_profile.target_price_min_eok)
+            target_max_eok = float(buyer_profile.target_price_max_eok)
+            if target_max_eok < target_min_eok:
+                target_min_eok, target_max_eok = target_max_eok, target_min_eok
+
+            target_mid_eok = round((target_min_eok + target_max_eok) / 2.0, 2)
+            market_prices_eok = [metric.current_avg_price / 10000.0 for metric in market_metrics]
+            market_ref_eok = round(
+                statistics.median(market_prices_eok) if market_prices_eok else target_mid_eok,
+                2,
+            )
+
+            expected_ltv_pct = max(0.0, min(100.0, float(buyer_profile.expected_ltv_pct)))
+            acquisition_cost_pct = max(0.0, float(buyer_profile.acquisition_cost_pct))
+            loan_term_years = max(1, int(buyer_profile.loan_term_years))
+            base_rate_pct = max(0.0, float(buyer_profile.base_rate_pct))
+            stress_rate_pct = max(0.0, float(buyer_profile.stress_rate_pct))
+            monthly_income_manwon = max(0.0, float(buyer_profile.monthly_net_income_manwon))
+            monthly_saving_manwon = max(0.0, float(buyer_profile.monthly_saving_manwon))
+            available_cash_manwon = max(0.0, float(buyer_profile.available_cash_manwon))
+            threshold_pct = max(10.0, min(80.0, float(buyer_profile.affordability_threshold_pct)))
+
+            target_mid_manwon = target_mid_eok * 10000.0
+            max_loan_manwon = round(target_mid_manwon * (expected_ltv_pct / 100.0), 1)
+            acquisition_cost_manwon = round(target_mid_manwon * (acquisition_cost_pct / 100.0), 1)
+            required_cash_manwon = round(max(0.0, target_mid_manwon - max_loan_manwon) + acquisition_cost_manwon, 1)
+            cash_gap_manwon = round(required_cash_manwon - available_cash_manwon, 1)
+
+            months_to_goal: int | None
+            if cash_gap_manwon <= 0:
+                months_to_goal = 0
+            elif monthly_saving_manwon > 0:
+                months_to_goal = int(math.ceil(cash_gap_manwon / monthly_saving_manwon))
+            else:
+                months_to_goal = None
+
+            base_payment_manwon = round(
+                self._monthly_payment_manwon(max_loan_manwon, base_rate_pct, loan_term_years),
+                1,
+            )
+            stress_payment_manwon = round(
+                self._monthly_payment_manwon(max_loan_manwon, stress_rate_pct, loan_term_years),
+                1,
+            )
+
+            base_burden_pct = round((base_payment_manwon / monthly_income_manwon) * 100.0, 1) if monthly_income_manwon else 0.0
+            stress_burden_pct = (
+                round((stress_payment_manwon / monthly_income_manwon) * 100.0, 1) if monthly_income_manwon else 0.0
+            )
+
+            readiness_status = "준비 필요"
+            if monthly_income_manwon > 0:
+                if cash_gap_manwon <= 0 and stress_burden_pct <= threshold_pct:
+                    readiness_status = "준비 완료"
+                elif (
+                    (cash_gap_manwon <= 0 and stress_burden_pct <= threshold_pct + 8.0)
+                    or (
+                        cash_gap_manwon > 0
+                        and months_to_goal is not None
+                        and months_to_goal <= 18
+                        and stress_burden_pct <= threshold_pct + 10.0
+                    )
+                ):
+                    readiness_status = "준비 진행"
+
+            target_vs_market_pct = (
+                round(((target_mid_eok - market_ref_eok) / market_ref_eok) * 100.0, 1) if market_ref_eok > 0 else 0.0
+            )
+
+            base.update(
+                {
+                    "readiness_status": readiness_status,
+                    "target_price_min_eok": round(target_min_eok, 2),
+                    "target_price_max_eok": round(target_max_eok, 2),
+                    "target_price_mid_eok": target_mid_eok,
+                    "market_reference_price_eok": market_ref_eok,
+                    "target_vs_market_pct": target_vs_market_pct,
+                    "expected_ltv_pct": round(expected_ltv_pct, 1),
+                    "acquisition_cost_pct": round(acquisition_cost_pct, 1),
+                    "loan_term_years": loan_term_years,
+                    "base_rate_pct": round(base_rate_pct, 2),
+                    "stress_rate_pct": round(stress_rate_pct, 2),
+                    "monthly_net_income_manwon": round(monthly_income_manwon, 1),
+                    "monthly_saving_manwon": round(monthly_saving_manwon, 1),
+                    "available_cash_manwon": round(available_cash_manwon, 1),
+                    "required_cash_manwon": required_cash_manwon,
+                    "cash_gap_manwon": cash_gap_manwon,
+                    "months_to_goal": months_to_goal,
+                    "estimated_loan_manwon": max_loan_manwon,
+                    "monthly_payment_base_manwon": base_payment_manwon,
+                    "monthly_payment_stress_manwon": stress_payment_manwon,
+                    "monthly_burden_base_pct": base_burden_pct,
+                    "monthly_burden_stress_pct": stress_burden_pct,
+                    "affordability_threshold_pct": round(threshold_pct, 1),
+                }
+            )
             return base
 
         if section.id == "today_signal":
@@ -191,6 +374,19 @@ class DailyReportPipeline:
             for item in news_items
         ]
         return base
+
+    def _monthly_payment_manwon(self, principal_manwon: float, annual_rate_pct: float, term_years: int) -> float:
+        principal = max(0.0, float(principal_manwon))
+        months = max(1, int(term_years) * 12)
+        monthly_rate = max(0.0, float(annual_rate_pct)) / 100.0 / 12.0
+        if monthly_rate == 0.0:
+            return principal / months
+
+        growth = (1.0 + monthly_rate) ** months
+        denominator = growth - 1.0
+        if denominator == 0.0:
+            return principal / months
+        return principal * monthly_rate * growth / denominator
 
     def _compose_section_body(
         self,
@@ -294,6 +490,7 @@ class DailyReportPipeline:
         section_bodies: dict[str, str],
         report_path: Path,
         market_data_mode: str,
+        health: dict[str, Any],
     ) -> None:
         self.data_processed_dir.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -308,6 +505,7 @@ class DailyReportPipeline:
                 "market_metrics": len(market_metrics),
             },
             "market_data_mode": market_data_mode,
+            "health": health,
             "sections": section_bodies,
             "report_path": str(report_path),
         }

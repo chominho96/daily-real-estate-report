@@ -49,12 +49,28 @@ class RealEstateAPIConfig:
 
 
 @dataclass
+class BuyerProfileConfig:
+    monthly_net_income_manwon: float
+    monthly_saving_manwon: float
+    available_cash_manwon: float
+    target_price_min_eok: float
+    target_price_max_eok: float
+    expected_ltv_pct: float
+    acquisition_cost_pct: float
+    loan_term_years: int
+    base_rate_pct: float
+    stress_rate_pct: float
+    affordability_threshold_pct: float
+
+
+@dataclass
 class ReportConfig:
     timezone: str
     language: str
     llm: LLMConfig
     news: NewsConfig
     real_estate_api: RealEstateAPIConfig
+    buyer_profile: BuyerProfileConfig
     sections: list[SectionConfig]
 
 
