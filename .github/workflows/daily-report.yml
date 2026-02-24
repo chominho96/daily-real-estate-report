@@ -21,6 +21,9 @@ jobs:
     outputs:
       report_path: ${{ steps.generate_report.outputs.report_path }}
       report_slug: ${{ steps.generate_report.outputs.report_slug }}
+      health_status: ${{ steps.assess_health.outputs.health_status }}
+      health_summary: ${{ steps.assess_health.outputs.health_summary }}
+      health_cause: ${{ steps.assess_health.outputs.health_cause }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,6 +81,47 @@ jobs:
           REPORT_SLUG="${REPORT_FILE%.md}"
           echo "report_slug=${REPORT_SLUG}" >> "$GITHUB_OUTPUT"
 
+      - name: Assess report health
+        id: assess_health
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          run_files = sorted(Path("data/processed").glob("run-*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+          health_status = "warning"
+          health_summary = "런 아티팩트를 찾지 못했습니다."
+          health_cause = "리포트 생성 직후 파일 저장 실패 또는 경로 변경 가능성이 있습니다."
+
+          if run_files:
+              payload = json.loads(run_files[0].read_text(encoding="utf-8"))
+              health = payload.get("health") or {}
+              issues = list(health.get("issues") or [])
+
+              if not issues:
+                  health_status = str(health.get("status") or "ok")
+                  health_summary = "치명적/주의 이슈가 감지되지 않았습니다."
+                  health_cause = ""
+              else:
+                  severity_rank = {"critical": 3, "warning": 2, "info": 1}
+                  issues.sort(key=lambda x: severity_rank.get(str(x.get("severity", "info")), 1), reverse=True)
+                  top = issues[0]
+                  health_status = str(health.get("status") or top.get("severity") or "warning")
+                  health_summary = str(top.get("message") or "주의가 필요한 이슈가 감지되었습니다.")
+                  health_cause = str(top.get("possible_cause") or "일시적 네트워크/인증 이슈일 수 있으니 로그 확인이 필요합니다.")
+
+          health_summary = " ".join(health_summary.split())
+          health_cause = " ".join(health_cause.split())
+
+          with output_path.open("a", encoding="utf-8") as fh:
+              fh.write(f"health_status={health_status}\n")
+              fh.write(f"health_summary={health_summary}\n")
+              fh.write(f"health_cause={health_cause}\n")
+          PY
+
       - name: Commit generated artifacts
         run: |
           if [[ -n "$(git status --porcelain)" ]]; then
@@ -116,6 +160,9 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
           REPORT_SLUG: ${{ needs.generate-and-build.outputs.report_slug }}
+          HEALTH_STATUS: ${{ needs.generate-and-build.outputs.health_status }}
+          HEALTH_SUMMARY: ${{ needs.generate-and-build.outputs.health_summary }}
+          HEALTH_CAUSE: ${{ needs.generate-and-build.outputs.health_cause }}
         run: |
           NOW_KST=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')
           TODAY_KST=$(TZ=Asia/Seoul date '+%Y-%m-%d')
@@ -125,20 +172,60 @@ jobs:
             REPORT_DAY="$TODAY_KST"
           fi
           REPORT_URL="${BASE_URL}reports/${REPORT_DAY}/"
+          export REPORT_URL NOW_KST
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
 
-          payload=$(cat <<EOF
-          {
-            "content": "✅ 일일 부동산 시황 보고서가 생성되었습니다.",
-            "embeds": [
-              {
-                "title": "보고서 보러가기",
-                "url": "${REPORT_URL}",
-                "description": "생성 시각(KST): ${NOW_KST}\n보고서 링크: ${REPORT_URL}",
-                "color": 3066993
-              }
-            ]
+          report_url = os.environ["REPORT_URL"]
+          now_kst = os.environ["NOW_KST"]
+          health_status = (os.environ.get("HEALTH_STATUS") or "ok").strip().lower()
+          health_summary = (os.environ.get("HEALTH_SUMMARY") or "").strip()
+          health_cause = (os.environ.get("HEALTH_CAUSE") or "").strip()
+          webhook_url = os.environ["DISCORD_WEBHOOK_URL"]
+
+          color = 3066993
+          content = "✅ 일일 부동산 시황 보고서가 생성되었습니다."
+          fields = []
+          if health_status in {"warning", "critical"}:
+              content = "⚠️ 일일 부동산 시황 보고서가 생성되었지만 점검 이슈가 있습니다."
+              color = 15105570 if health_status == "warning" else 15158332
+              fields.append(
+                  {
+                      "name": "참고 메시지",
+                      "value": health_summary or "주의 이슈가 감지되었습니다.",
+                      "inline": False,
+                  }
+              )
+              fields.append(
+                  {
+                      "name": "가능 원인(간단)",
+                      "value": health_cause or "일시적 네트워크/인증/응답 지연 이슈일 수 있습니다.",
+                      "inline": False,
+                  }
+              )
+
+          payload = {
+              "content": content,
+              "embeds": [
+                  {
+                      "title": "보고서 보러가기",
+                      "url": report_url,
+                      "description": f"생성 시각(KST): {now_kst}\n보고서 링크: {report_url}",
+                      "color": color,
+                      "fields": fields,
+                  }
+              ],
           }
-          EOF
-          )
 
-          curl -sS -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK_URL"
+          body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+          req = urllib.request.Request(
+              webhook_url,
+              data=body,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(req, timeout=15) as resp:
+              resp.read()
+          PY
