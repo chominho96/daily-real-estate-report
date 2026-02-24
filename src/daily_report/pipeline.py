@@ -227,6 +227,8 @@ class DailyReportPipeline:
             base["metrics"] = [
                 {
                     **asdict(metric),
+                    "current_median_price_eok": round(metric.current_avg_price / 10000.0, 4),
+                    # Keep legacy key for compatibility with existing prompts/fallback paths.
                     "current_avg_price_eok": round(metric.current_avg_price / 10000.0, 4),
                 }
                 for metric in market_metrics
@@ -431,7 +433,7 @@ class DailyReportPipeline:
             "officetel": "오피스텔",
         }
         lines = [
-            "| 지역 | 자산군 | 평균 가격(억 원) | 전일 대비 | 전주 대비 | 거래 건수 | 거래 건수(전일 대비) |",
+            "| 지역 | 자산군 | 중앙 가격(억 원) | 전일 대비 | 전주 대비 | 거래 건수 | 거래 건수(전일 대비) |",
             "|---|---:|---:|---:|---:|---:|---:|",
         ]
         for metric in market_metrics:

@@ -246,7 +246,7 @@ class SectionWriter:
                 + '{\n'
                 + '  "summary_points": ["해석 문장", "해석 문장", "해석 문장"]\n'
                 + '}\n'
-                + "규칙: 3~5개 문자열. 가격 표현은 억 원 단위."
+                + "규칙: 3~5개 문자열. 가격 표현은 억 원 단위이며 중앙값 기준으로 해석."
             )
 
         if section.id == "insights":
@@ -863,10 +863,10 @@ class SectionWriter:
             lines = []
             for metric in metrics[:4]:
                 lines.append(
-                    "{region} {asset}: 평균가 {price:.2f}억, 전일 {d:+.2f}%, 전주 {w:+.2f}%, 거래 {txn}건".format(
+                    "{region} {asset}: 중앙가 {price:.2f}억, 전일 {d:+.2f}%, 전주 {w:+.2f}%, 거래 {txn}건".format(
                         region=metric["region_name"],
                         asset=asset_map.get(metric["asset"], metric["asset"]),
-                        price=float(metric.get("current_avg_price_eok", 0.0)),
+                        price=float(metric.get("current_median_price_eok", metric.get("current_avg_price_eok", 0.0))),
                         d=float(metric["daily_change_pct"]),
                         w=float(metric["weekly_change_pct"]),
                         txn=int(metric["current_txn_count"]),
@@ -897,7 +897,7 @@ class SectionWriter:
                     "    - 거래량 변화는 표본 수와 함께 해석해야 합니다.",
                     "",
                     "- 해석 시 유의사항",
-                    "    - 단일 거래가 평균 가격에 큰 영향을 줄 수 있습니다.",
+                    "    - 표본 수가 매우 적으면 중앙값도 단기 왜곡될 수 있습니다.",
                 ]
             )
             return "\n".join(lines)

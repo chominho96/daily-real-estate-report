@@ -4,6 +4,7 @@ import hashlib
 import os
 import random
 import re
+import statistics
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -138,7 +139,8 @@ def _fetch_market_points_via_public_api(
                 region_code=region_code,
                 asset=asset,
                 observed_at=observed_at,
-                avg_price=round(sum(prices) / len(prices), 2),
+                # Use median to reduce distortion from a few extreme trades.
+                avg_price=round(float(statistics.median(prices)), 2),
                 txn_count=len(prices),
             )
         )
