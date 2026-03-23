@@ -64,7 +64,7 @@ def load_report_config(path: Path) -> ReportConfig:
         language=str(data.get("language", "ko")),
         llm=LLMConfig(
             provider=str(llm_cfg.get("provider", "codex")),
-            model=str(llm_cfg.get("model", "gpt-5-codex-mini")),
+            model=str(llm_cfg.get("model", "gpt-5.4")),
             temperature=float(llm_cfg.get("temperature", 0.2)),
         ),
         news=NewsConfig(

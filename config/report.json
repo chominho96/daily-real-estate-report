@@ -3,7 +3,7 @@
   "language": "ko",
   "llm": {
     "provider": "codex",
-    "model": "gpt-5-codex-mini",
+    "model": "gpt-5.4",
     "temperature": 0.2
   },
   "news": {
